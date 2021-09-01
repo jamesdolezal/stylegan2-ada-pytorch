@@ -22,6 +22,7 @@ import click
 import numpy as np
 import PIL.Image
 from tqdm import tqdm
+from slideflow_utils import slideflow_iterator
 
 #----------------------------------------------------------------------------
 
@@ -308,6 +309,7 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.option('--max-images', help='Output only up to `max-images` images', type=int, default=None)
 @click.option('--resize-filter', help='Filter to use when resizing images for output resolution', type=click.Choice(['box', 'lanczos']), default='lanczos', show_default=True)
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide']))
+@click.option('--slideflow', help='Flag indicating that source directory contains slideflow tfrecords', is_flag=True)
 @click.option('--width', help='Output width', type=int)
 @click.option('--height', help='Output height', type=int)
 def convert_dataset(
@@ -318,7 +320,8 @@ def convert_dataset(
     transform: Optional[str],
     resize_filter: str,
     width: Optional[int],
-    height: Optional[int]
+    height: Optional[int],
+    slideflow: bool
 ):
     """Convert an image dataset into a dataset archive usable with StyleGAN2 ADA PyTorch.
 
@@ -384,53 +387,58 @@ def convert_dataset(
     if dest == '':
         ctx.fail('--dest output filename or directory must not be an empty string')
 
-    num_files, input_iter = open_dataset(source, max_images=max_images)
-    archive_root_dir, save_bytes, close_dest = open_dest(dest)
-
     transform_image = make_transform(transform, width, height, resize_filter)
-
-    dataset_attrs = None
-
+    archive_root_dir, save_bytes, close_dest = open_dest(dest)
     labels = []
-    for idx, image in tqdm(enumerate(input_iter), total=num_files):
-        idx_str = f'{idx:08d}'
-        archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
 
-        # Apply crop and resize.
-        img = transform_image(image['img'])
+    if slideflow:
+        num_files, input_iter = slideflow_iterator(source, transform_image)
+        for idx, image in tqdm(enumerate(input_iter), total=num_files):
+            idx_str = f'{idx:08d}'
+            archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
+            save_bytes(os.path.join(archive_root_dir, archive_fname), image['buffer'].getbuffer())
+            labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+    else:
+        num_files, input_iter = open_dataset(source, max_images=max_images)
+        for idx, image in tqdm(enumerate(input_iter), total=num_files):
+            idx_str = f'{idx:08d}'
+            archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
 
-        # Transform may drop images.
-        if img is None:
-            continue
+            # Apply crop and resize.
+            img = transform_image(image['img'])
 
-        # Error check to require uniform image attributes across
-        # the whole dataset.
-        channels = img.shape[2] if img.ndim == 3 else 1
-        cur_image_attrs = {
-            'width': img.shape[1],
-            'height': img.shape[0],
-            'channels': channels
-        }
-        if dataset_attrs is None:
-            dataset_attrs = cur_image_attrs
-            width = dataset_attrs['width']
-            height = dataset_attrs['height']
-            if width != height:
-                error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
-            if dataset_attrs['channels'] not in [1, 3]:
-                error('Input images must be stored as RGB or grayscale')
-            if width != 2 ** int(np.floor(np.log2(width))):
-                error('Image width/height after scale and crop are required to be power-of-two')
-        elif dataset_attrs != cur_image_attrs:
-            err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()]
-            error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
+            # Transform may drop images.
+            if img is None:
+                continue
 
-        # Save the image as an uncompressed PNG.
-        img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
-        image_bits = io.BytesIO()
-        img.save(image_bits, format='png', compress_level=0, optimize=False)
-        save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
-        labels.append([archive_fname, image['label']] if image['label'] is not None else None)
+            # Error check to require uniform image attributes across
+            # the whole dataset.
+            channels = img.shape[2] if img.ndim == 3 else 1
+            cur_image_attrs = {
+                'width': img.shape[1],
+                'height': img.shape[0],
+                'channels': channels
+            }
+            if dataset_attrs is None:
+                dataset_attrs = cur_image_attrs
+                width = dataset_attrs['width']
+                height = dataset_attrs['height']
+                if width != height:
+                    error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
+                if dataset_attrs['channels'] not in [1, 3]:
+                    error('Input images must be stored as RGB or grayscale')
+                if width != 2 ** int(np.floor(np.log2(width))):
+                    error('Image width/height after scale and crop are required to be power-of-two')
+            elif dataset_attrs != cur_image_attrs:
+                err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()]
+                error(f'Image {archive_fname} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
+
+            # Save the image as an uncompressed PNG.
+            img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
+            image_bits = io.BytesIO()
+            img.save(image_bits, format='png', compress_level=0, optimize=False)
+            save_bytes(os.path.join(archive_root_dir, archive_fname), image_bits.getbuffer())
+            labels.append([archive_fname, image['label']] if image['label'] is not None else None)
 
     metadata = {
         'labels': labels if all(x is not None for x in labels) else None
