@@ -185,7 +185,7 @@ def slideflow_iterator(directory, transform_img):
 
     def generator():
         tfr_q = mp.Queue()
-        img_q = mp.Queue()
+        img_q = mp.Queue(1024)
         pool = mp.Pool(num_cores, initializer=tfrecord_worker, initargs=(tfr_q, img_q, transform_img))
         tfrecords_finished = 0
         for tfrecord in tfrecord_paths:
