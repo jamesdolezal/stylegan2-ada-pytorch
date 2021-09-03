@@ -64,6 +64,7 @@ def setup_training_loop_kwargs(
     allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
     nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
     workers    = None, # Override number of DataLoader workers: <int>, default = 3
+    lazy_resume= None, # Allow lazy loading from saved pretrained networks
 ):
     args = dnnlib.EasyDict()
 
@@ -350,6 +351,12 @@ def setup_training_loop_kwargs(
     if allow_tf32:
         args.allow_tf32 = True
 
+    if lazy_resume is None:
+        lazy_resume = False
+    assert isinstance(lazy_resume, bool)
+    if lazy_resume:
+        args.lazy_resume = True
+
     if workers is not None:
         assert isinstance(workers, int)
         if not workers >= 1:
@@ -434,6 +441,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--nobench', help='Disable cuDNN benchmarking', type=bool, metavar='BOOL')
 @click.option('--allow-tf32', help='Allow PyTorch to use TF32 internally', type=bool, metavar='BOOL')
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
+@click.option('--lazy-resume', help='Allow lazy resuming from saved networks', type=bool, metavar='BOOL')
 
 def main(ctx, outdir, dry_run, **config_kwargs):
     """Train a GAN using the techniques described in the paper
