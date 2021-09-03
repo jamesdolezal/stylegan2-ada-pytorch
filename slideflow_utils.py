@@ -3,8 +3,9 @@ import os
 import tensorflow as tf
 import imghdr
 import json
-from os.path import join, isfile
+from os.path import join, isfile, isdir, exists
 import threading
+from slideflow.io.tfrecords import update_manifest_at_dir
 
 FEATURE_DESCRIPTION = {'slide':    	tf.io.FixedLenFeature([], tf.string),
                        'image_raw':	tf.io.FixedLenFeature([], tf.string),
@@ -123,14 +124,34 @@ def path_to_ext(path):
 
 #----------------------------------------------------------------------------
 
-def slideflow_iterator(directory, transform_img=None):
+def slideflow_iterator(directory, transform_img=None, subfolder_labels=False):
     num_threads = 16
-    tfrecords = [f for f in os.listdir(directory) if isfile(join(directory, f)) and path_to_ext(f) == 'tfrecords']
-    tfrecord_paths = [join(directory, tfr) for tfr in tfrecords]
-    with open(join(directory, 'manifest.json'), 'r') as manifest_file:
-        manifest = json.load(manifest_file)
-
-    num_tiles = sum([manifest[tfr]['total'] for tfr in tfrecords])
+    num_tiles = 0
+    labels = {}
+    label_idx = {}
+    tfrecords, tfrecord_paths = [], []
+    if subfolder_labels:
+        subfolders = [d for d in os.listdir(directory) if isdir(join(directory, d))]
+        for i, name in enumerate(subfolders):
+            subdir = join(directory, name)
+            subfolder_tfr = [f for f in os.listdir(subdir) if isfile(join(subdir, f)) and path_to_ext(f) == 'tfrecords']
+            subfolder_tfr_paths = [join(subdir, tfr) for tfr in subfolder_tfr]
+            tfrecords += subfolder_tfr
+            tfrecord_paths += subfolder_tfr_paths
+            if not exists(join(subdir, 'manifest.json')):
+                update_manifest_at_dir(subdir)
+            with open(join(subdir, 'manifest.json'), 'r') as manifest_file:
+                manifest = json.load(manifest_file)
+            num_tiles += sum([manifest[tfr]['total'] for tfr in subfolder_tfr])
+            labels.update({tfr: i for tfr in subfolder_tfr_paths})
+            label_idx[name] = i
+        print("Assigned labels:", label_idx)
+    else:
+        tfrecords = [f for f in os.listdir(directory) if isfile(join(directory, f)) and path_to_ext(f) == 'tfrecords']
+        tfrecord_paths = [join(directory, tfr) for tfr in tfrecords]
+        with open(join(directory, 'manifest.json'), 'r') as manifest_file:
+            manifest = json.load(manifest_file)
+    print(labels)
 
     def generator():
 
@@ -149,7 +170,8 @@ def slideflow_iterator(directory, transform_img=None):
                         if img is None:
                             continue
                         image_bits = img
-                        img_q.put({'buffer': image_bits, 'label': None})
+                        label = None if tfrecord not in labels else labels[tfrecord]
+                        img_q.put({'buffer': image_bits, 'label': label})
                     img_q.put(None)
                     tfr_q.task_done()
                 except queue.Empty:

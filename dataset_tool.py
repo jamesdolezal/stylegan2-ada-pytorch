@@ -310,6 +310,7 @@ def open_dest(dest: str) -> Tuple[str, Callable[[str, Union[bytes, str]], None],
 @click.option('--resize-filter', help='Filter to use when resizing images for output resolution', type=click.Choice(['box', 'lanczos']), default='lanczos', show_default=True)
 @click.option('--transform', help='Input crop/resize mode', type=click.Choice(['center-crop', 'center-crop-wide']))
 @click.option('--slideflow', help='Flag indicating that source directory contains slideflow tfrecords', is_flag=True)
+@click.option('--subfolder-labels', help='Flag indicating that tfrecords are labeled by subfolder.', is_flag=True)
 @click.option('--width', help='Output width', type=int)
 @click.option('--height', help='Output height', type=int)
 def convert_dataset(
@@ -321,7 +322,8 @@ def convert_dataset(
     resize_filter: str,
     width: Optional[int],
     height: Optional[int],
-    slideflow: bool
+    slideflow: bool,
+    subfolder_labels: bool
 ):
     """Convert an image dataset into a dataset archive usable with StyleGAN2 ADA PyTorch.
 
@@ -392,7 +394,7 @@ def convert_dataset(
     labels = []
 
     if slideflow:
-        num_files, input_iter = slideflow_iterator(source) #not passing transform_image
+        num_files, input_iter = slideflow_iterator(source, subfolder_labels=subfolder_labels) #not passing transform_image
         for idx, image in tqdm(enumerate(input_iter), total=num_files):
             idx_str = f'{idx:08d}'
             archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
