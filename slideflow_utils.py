@@ -1,12 +1,10 @@
-import io
-import PIL
-import numpy as np
+import queue
 import os
 import tensorflow as tf
 import imghdr
 import json
 from os.path import join, isfile
-import multiprocessing as mp
+import threading
 
 FEATURE_DESCRIPTION = {'slide':    	tf.io.FixedLenFeature([], tf.string),
                        'image_raw':	tf.io.FixedLenFeature([], tf.string),
@@ -15,10 +13,6 @@ FEATURE_DESCRIPTION = {'slide':    	tf.io.FixedLenFeature([], tf.string),
 
 FEATURE_DESCRIPTION_LEGACY =  {'slide':    tf.io.FixedLenFeature([], tf.string),
                                'image_raw':tf.io.FixedLenFeature([], tf.string)}
-
-def error(msg):
-    print('Error: ' + msg)
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 
@@ -129,53 +123,8 @@ def path_to_ext(path):
 
 #----------------------------------------------------------------------------
 
-def tfrecord_worker(tfr_q, img_q, transformer):
-    while True:
-        tfrecord = tfr_q.get()
-        if tfrecord is None:
-            break
-        else:
-            dataset = tf.data.TFRecordDataset(tfrecord)
-            parser = get_tfrecord_parser(tfrecord, ('image_raw',), to_numpy=True, decode_images=True)
-            dataset_attrs = None
-            for i, record in enumerate(dataset):
-                image = parser(record)[0].numpy()
-                img = transformer(image)
-                if img is None:
-                    continue
-                 # Error check to require uniform image attributes across
-                # the whole dataset.
-                channels = img.shape[2] if img.ndim == 3 else 1
-                cur_image_attrs = {
-                    'width': img.shape[1],
-                    'height': img.shape[0],
-                    'channels': channels
-                }
-                if dataset_attrs is None:
-                    dataset_attrs = cur_image_attrs
-                    width = dataset_attrs['width']
-                    height = dataset_attrs['height']
-                    if width != height:
-                        error(f'Image dimensions after scale and crop are required to be square.  Got {width}x{height}')
-                    if dataset_attrs['channels'] not in [1, 3]:
-                        error('Input images must be stored as RGB or grayscale')
-                    if width != 2 ** int(np.floor(np.log2(width))):
-                        error('Image width/height after scale and crop are required to be power-of-two')
-                elif dataset_attrs != cur_image_attrs:
-                    err = [f'  dataset {k}/cur image {k}: {dataset_attrs[k]}/{cur_image_attrs[k]}' for k in dataset_attrs.keys()]
-                    error(f'Image {tfrecord} attributes must be equal across all images of the dataset.  Got:\n' + '\n'.join(err))
-
-                # Save the image as an uncompressed PNG.
-                img = PIL.Image.fromarray(img, { 1: 'L', 3: 'RGB' }[channels])
-                image_bits = io.BytesIO()
-                img.save(image_bits, format='png', compress_level=0, optimize=False)
-
-                img_q.put({'buffer': image_bits, 'label': None})
-            img_q.put(None)
-
-def slideflow_iterator(directory, transform_img):
-    import tensorflow as tf
-    num_cores = 16
+def slideflow_iterator(directory, transform_img=None):
+    num_threads = 16
     tfrecords = [f for f in os.listdir(directory) if isfile(join(directory, f)) and path_to_ext(f) == 'tfrecords']
     tfrecord_paths = [join(directory, tfr) for tfr in tfrecords]
     with open(join(directory, 'manifest.json'), 'r') as manifest_file:
@@ -184,14 +133,42 @@ def slideflow_iterator(directory, transform_img):
     num_tiles = sum([manifest[tfr]['total'] for tfr in tfrecords])
 
     def generator():
-        tfr_q = mp.Queue()
-        img_q = mp.Queue(1024)
-        pool = mp.Pool(num_cores, initializer=tfrecord_worker, initargs=(tfr_q, img_q, transform_img))
+
+        task_finished = False
+
+        def tfrecord_worker(tfr_q, img_q, transformer=None):
+            while True:
+                try:
+                    tfrecord = tfr_q.get()
+                    dataset = tf.data.TFRecordDataset(tfrecord)
+                    parser = get_tfrecord_parser(tfrecord, ('image_raw',), to_numpy=True, decode_images=False)
+                    for record in dataset:
+                        img = parser(record)[0]
+                        if transformer is not None:
+                            img = transformer(img)
+                        if img is None:
+                            continue
+                        image_bits = img
+                        img_q.put({'buffer': image_bits, 'label': None})
+                    img_q.put(None)
+                    tfr_q.task_done()
+                except queue.Empty:
+                    if task_finished:
+                        return
+                except:
+                    img_q.put(None)
+                    tfr_q.task_done()
+
+        tfr_q = queue.Queue()
+        img_q = queue.Queue(1024)
+        threads = [threading.Thread(target=tfrecord_worker, daemon=True, args=(tfr_q, img_q)) for t in range(num_threads)]
+        for thread in threads:
+            thread.start()
+
         tfrecords_finished = 0
         for tfrecord in tfrecord_paths:
             tfr_q.put(tfrecord)
-        for _ in range(num_cores):
-            tfr_q.put(None)
+
         while True:
             image = img_q.get()
             if image is None:
@@ -202,7 +179,6 @@ def slideflow_iterator(directory, transform_img):
                     continue
             else:
                 yield image
-        pool.close()
-        pool.join()
+        task_finished = True
 
     return num_tiles, generator()

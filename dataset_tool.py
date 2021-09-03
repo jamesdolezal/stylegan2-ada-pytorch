@@ -392,11 +392,11 @@ def convert_dataset(
     labels = []
 
     if slideflow:
-        num_files, input_iter = slideflow_iterator(source, transform_image)
+        num_files, input_iter = slideflow_iterator(source) #not passing transform_image
         for idx, image in tqdm(enumerate(input_iter), total=num_files):
             idx_str = f'{idx:08d}'
             archive_fname = f'{idx_str[:5]}/img{idx_str}.png'
-            save_bytes(os.path.join(archive_root_dir, archive_fname), image['buffer'].getbuffer())
+            save_bytes(os.path.join(archive_root_dir, archive_fname), image['buffer'])
             labels.append([archive_fname, image['label']] if image['label'] is not None else None)
     else:
         num_files, input_iter = open_dataset(source, max_images=max_images)
