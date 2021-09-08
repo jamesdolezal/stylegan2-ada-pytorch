@@ -1,11 +1,18 @@
 import queue
 import os
+
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 import tensorflow as tf
+from slideflow.io.tfrecords import update_manifest_at_dir
+del os.environ['CUDA_VISIBLE_DEVICES']
+
 import imghdr
 import json
 from os.path import join, isfile, isdir, exists
 import threading
-from slideflow.io.tfrecords import update_manifest_at_dir
+
 
 FEATURE_DESCRIPTION = {'slide':    	tf.io.FixedLenFeature([], tf.string),
                        'image_raw':	tf.io.FixedLenFeature([], tf.string),

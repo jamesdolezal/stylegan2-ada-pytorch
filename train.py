@@ -17,6 +17,14 @@ import tempfile
 import torch
 import dnnlib
 
+import logging
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+import tensorflow as tf
+assert(not tf.test.is_gpu_available())
+del os.environ['CUDA_VISIBLE_DEVICES']
+
 from training import training_loop
 from metrics import metric_main
 from torch_utils import training_stats
@@ -37,7 +45,8 @@ def setup_training_loop_kwargs(
     seed       = None, # Random seed: <int>, default = 0
 
     # Dataset.
-    data       = None, # Training dataset (required): <path>
+    data       = None, # Training dataset (either this or `slideflow` is required): <path>
+    slideflow  = None, # Slideflow configuration JSON (either this or `data` is required): <path>
     cond       = None, # Train conditional model based on dataset labels: <bool>, default = False
     subset     = None, # Train with only N images: <int>, default = all
     mirror     = None, # Augment dataset with x-flips: <bool>, default = False
@@ -103,15 +112,27 @@ def setup_training_loop_kwargs(
     # Dataset: data, cond, subset, mirror
     # -----------------------------------
 
-    assert data is not None
-    assert isinstance(data, str)
-    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
+    assert (data is not None or slideflow is not None) and not (data is not None and slideflow is not None)
+    assert data is None or isinstance(data, str)
+    assert slideflow is None or isinstance(slideflow, str)
+    if data is not None:
+        args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=cond, max_size=None, xflip=False)
+    elif slideflow is not None:
+        try:
+            with open(slideflow, 'r') as sf_args_f:
+                args.slideflow_kwargs = json.load(sf_args_f)
+        except IOError as err:
+            raise UserError(f'--slideflow: {err}')
+        args.training_set_kwargs = dnnlib.EasyDict(class_name='training.slideflow_dataset.SlideflowIterator', path=slideflow, use_labels=cond, max_size=None, xflip=False)
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
-        training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs) # subclass of training.dataset.Dataset
+        training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs, **args.slideflow_kwargs) # subclass of training.dataset.Dataset
         args.training_set_kwargs.resolution = training_set.resolution # be explicit about resolution
         args.training_set_kwargs.use_labels = training_set.has_labels # be explicit about labels
-        args.training_set_kwargs.max_size = len(training_set) # be explicit about dataset size
+        if data is not None:
+            args.training_set_kwargs.max_size = len(training_set) # be explicit about dataset size
+        else:
+            args.training_set_kwargs.max_size = None
         desc = training_set.name
         del training_set # conserve memory
     except IOError as err:
@@ -129,10 +150,10 @@ def setup_training_loop_kwargs(
 
     if subset is not None:
         assert isinstance(subset, int)
-        if not 1 <= subset <= args.training_set_kwargs.max_size:
+        if args.training_set_kwargs.max_size and not 1 <= subset <= args.training_set_kwargs.max_size:
             raise UserError(f'--subset must be between 1 and {args.training_set_kwargs.max_size}')
         desc += f'-subset{subset}'
-        if subset < args.training_set_kwargs.max_size:
+        if args.training_set_kwargs.max_size and subset < args.training_set_kwargs.max_size:
             args.training_set_kwargs.max_size = subset
             args.training_set_kwargs.random_seed = args.random_seed
 
@@ -414,7 +435,8 @@ class CommaSeparatedList(click.ParamType):
 @click.option('-n', '--dry-run', help='Print training options and exit', is_flag=True)
 
 # Dataset.
-@click.option('--data', help='Training data (directory or zip)', metavar='PATH', required=True)
+@click.option('--data', help='Training data (directory or zip)', metavar='PATH', required=False)
+@click.option('--slideflow', help='Slideflow configuration (JSON)', metavar='PATH', required=False)
 @click.option('--cond', help='Train conditional model based on dataset labels [default: false]', type=bool, metavar='BOOL')
 @click.option('--subset', help='Train with only N images [default: all]', type=int, metavar='INT')
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
@@ -487,6 +509,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
       lsundog256     LSUN Dog trained at 256x256 resolution.
       <PATH or URL>  Custom network pickle.
     """
+    torch.multiprocessing.set_start_method('spawn')
     dnnlib.util.Logger(should_flush=True)
 
     # Setup training options.
@@ -520,6 +543,10 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     print(f'Dataset x-flips:    {args.training_set_kwargs.xflip}')
     print()
 
+    if hasattr(args, 'slideflow_kwargs'):
+        print('Slideflow options:')
+        print(json.dumps(args.slideflow_kwargs, indent=2))
+
     # Dry run?
     if dry_run:
         print('Dry run; exiting.')
@@ -533,7 +560,6 @@ def main(ctx, outdir, dry_run, **config_kwargs):
 
     # Launch processes.
     print('Launching processes...')
-    torch.multiprocessing.set_start_method('spawn')
     with tempfile.TemporaryDirectory() as temp_dir:
         if args.num_gpus == 1:
             subprocess_fn(rank=0, args=args, temp_dir=temp_dir)

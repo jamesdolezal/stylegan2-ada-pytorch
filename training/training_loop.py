@@ -7,6 +7,17 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import os
+
+import logging
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+import tensorflow as tf
+assert(not tf.test.is_gpu_available())
+import slideflow.io.tfrecords
+import slideflow as sf
+del os.environ['CUDA_VISIBLE_DEVICES']
+
 import time
 import copy
 import json
@@ -26,12 +37,24 @@ from metrics import metric_main
 
 #----------------------------------------------------------------------------
 
-def setup_snapshot_image_grid(training_set, random_seed=0):
+def setup_snapshot_image_grid_iterator(training_set, training_set_iterator):
+    gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
+    gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    batch_size = next(training_set_iterator)[0].shape[0]
+    num_to_take = ((gw * gh) // batch_size) + 1
+    images, labels = zip(*[next(training_set_iterator) for i in range(num_to_take)])
+    stacked_images = np.stack(np.concatenate(images, axis=0)[:gw * gh])
+    stacked_labels = np.stack(np.concatenate(labels, axis=0)[:gw * gh])
+    return (gw, gh), stacked_images, stacked_labels
+
+def setup_snapshot_image_grid(training_set, random_seed=0, training_set_iterator=None):
     rnd = np.random.RandomState(random_seed)
     gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
     gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
 
     # No labels => show random subset of training samples.
+    if not hasattr(training_set, '__len__'):
+        return setup_snapshot_image_grid_iterator(training_set, training_set_iterator)
     if not training_set.has_labels:
         all_indices = list(range(len(training_set)))
         rnd.shuffle(all_indices)
@@ -88,6 +111,7 @@ def save_image_grid(img, fname, drange, grid_size):
 def training_loop(
     run_dir                 = '.',      # Output directory.
     training_set_kwargs     = {},       # Options for training set.
+    slideflow_kwargs        = {},       # Options for SlideflowIterator.
     data_loader_kwargs      = {},       # Options for torch.utils.data.DataLoader.
     G_kwargs                = {},       # Options for generator network.
     D_kwargs                = {},       # Options for discriminator network.
@@ -134,12 +158,20 @@ def training_loop(
     # Load training set.
     if rank == 0:
         print('Loading training set...')
-    training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
-    training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
-    training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
+    training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs, **slideflow_kwargs) # subclass of training.dataset.Dataset
+    if training_set_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
+        training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, num_workers=0))
+    else:
+        training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
+        training_set_iterator = iter(torch.utils.data.DataLoader(dataset=training_set, sampler=training_set_sampler, batch_size=batch_size//num_gpus, **data_loader_kwargs))
+
+    if hasattr(training_set, '__len__'):
+        training_set_len = len(training_set)
+    else:
+        training_set_len = training_set.num_tiles
     if rank == 0:
         print()
-        print('Num images: ', len(training_set))
+        print('Num images: ', training_set_len)
         print('Image shape:', training_set.image_shape)
         print('Label shape:', training_set.label_shape)
         print()
@@ -220,7 +252,7 @@ def training_loop(
     grid_c = None
     if rank == 0:
         print('Exporting sample images...')
-        grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
+        grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set, training_set_iterator=training_set_iterator)
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
@@ -254,6 +286,7 @@ def training_loop(
     batch_idx = 0
     if progress_fn is not None:
         progress_fn(0, total_kimg)
+
     while True:
 
         # Fetch training data.
@@ -263,7 +296,7 @@ def training_loop(
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             all_gen_z = torch.randn([len(phases) * batch_size, G.z_dim], device=device)
             all_gen_z = [phase_gen_z.split(batch_gpu) for phase_gen_z in all_gen_z.split(batch_size)]
-            all_gen_c = [training_set.get_label(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
+            all_gen_c = [training_set.get_label(np.random.randint(training_set_len)) for _ in range(len(phases) * batch_size)]  # I'm not entirely sure that the slideflow overloaded get_label() function will work here
             all_gen_c = torch.from_numpy(np.stack(all_gen_c)).pin_memory().to(device)
             all_gen_c = [phase_gen_c.split(batch_gpu) for phase_gen_c in all_gen_c.split(batch_size)]
 
