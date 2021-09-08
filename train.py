@@ -39,41 +39,41 @@ class UserError(Exception):
 
 def setup_training_loop_kwargs(
     # General options (not included in desc).
-    gpus       = None, # Number of GPUs: <int>, default = 1 gpu
-    snap       = None, # Snapshot interval: <int>, default = 50 ticks
-    metrics    = None, # List of metric names: [], ['fid50k_full'] (default), ...
-    seed       = None, # Random seed: <int>, default = 0
+    gpus        = None, # Number of GPUs: <int>, default = 1 gpu
+    snap        = None, # Snapshot interval: <int>, default = 50 ticks
+    metrics     = None, # List of metric names: [], ['fid50k_full'] (default), ...
+    seed        = None, # Random seed: <int>, default = 0
 
     # Dataset.
-    data       = None, # Training dataset (either this or `slideflow` is required): <path>
-    slideflow  = None, # Slideflow configuration JSON (either this or `data` is required): <path>
-    cond       = None, # Train conditional model based on dataset labels: <bool>, default = False
-    subset     = None, # Train with only N images: <int>, default = all
-    mirror     = None, # Augment dataset with x-flips: <bool>, default = False
+    data        = None, # Training dataset (either this or `slideflow` is required): <path>
+    slideflow   = None, # Slideflow configuration JSON (either this or `data` is required): <path>
+    cond        = None, # Train conditional model based on dataset labels: <bool>, default = False
+    subset      = None, # Train with only N images: <int>, default = all
+    mirror      = None, # Augment dataset with x-flips: <bool>, default = False
 
     # Base config.
-    cfg        = None, # Base config: 'auto' (default), 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar'
-    gamma      = None, # Override R1 gamma: <float>
-    kimg       = None, # Override training duration: <int>
-    batch      = None, # Override batch size: <int>
+    cfg         = None, # Base config: 'auto' (default), 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar'
+    gamma       = None, # Override R1 gamma: <float>
+    kimg        = None, # Override training duration: <int>
+    batch       = None, # Override batch size: <int>
 
     # Discriminator augmentation.
-    aug        = None, # Augmentation mode: 'ada' (default), 'noaug', 'fixed'
-    p          = None, # Specify p for 'fixed' (required): <float>
-    target     = None, # Override ADA target for 'ada': <float>, default = depends on aug
-    augpipe    = None, # Augmentation pipeline: 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc' (default), ..., 'bgcfnc'
+    aug         = None, # Augmentation mode: 'ada' (default), 'noaug', 'fixed'
+    p           = None, # Specify p for 'fixed' (required): <float>
+    target      = None, # Override ADA target for 'ada': <float>, default = depends on aug
+    augpipe     = None, # Augmentation pipeline: 'blit', 'geom', 'color', 'filter', 'noise', 'cutout', 'bg', 'bgc' (default), ..., 'bgcfnc'
 
     # Transfer learning.
-    resume     = None, # Load previous network: 'noresume' (default), 'ffhq256', 'ffhq512', 'ffhq1024', 'celebahq256', 'lsundog256', <file>, <url>
-    freezed    = None, # Freeze-D: <int>, default = 0 discriminator layers
+    resume      = None, # Load previous network: 'noresume' (default), 'ffhq256', 'ffhq512', 'ffhq1024', 'celebahq256', 'lsundog256', <file>, <url>
+    freezed     = None, # Freeze-D: <int>, default = 0 discriminator layers
 
     # Performance options (not included in desc).
-    fp32       = None, # Disable mixed-precision training: <bool>, default = False
-    nhwc       = None, # Use NHWC memory format with FP16: <bool>, default = False
-    allow_tf32 = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
-    nobench    = None, # Disable cuDNN benchmarking: <bool>, default = False
-    workers    = None, # Override number of DataLoader workers: <int>, default = 3
-    lazy_resume= None, # Allow lazy loading from saved pretrained networks
+    fp32        = None, # Disable mixed-precision training: <bool>, default = False
+    nhwc        = None, # Use NHWC memory format with FP16: <bool>, default = False
+    allow_tf32  = None, # Allow PyTorch to use TF32 for matmul and convolutions: <bool>, default = False
+    nobench     = None, # Disable cuDNN benchmarking: <bool>, default = False
+    workers     = None, # Override number of DataLoader workers: <int>, default = 3
+    lazy_resume = None, # Allow lazy loading from saved pretrained networks
 ):
     args = dnnlib.EasyDict()
 
@@ -115,14 +115,19 @@ def setup_training_loop_kwargs(
     assert (data is not None or slideflow is not None) and not (data is not None and slideflow is not None)
     assert data is None or isinstance(data, str)
     assert slideflow is None or isinstance(slideflow, str)
+    interp_embed = False
     if data is not None:
         args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=cond, max_size=None, xflip=False)
     elif slideflow is not None:
         try:
             with open(slideflow, 'r') as sf_args_f:
-                args.slideflow_kwargs = json.load(sf_args_f)
+                args.slideflow_kwargs = dnnlib.EasyDict(**json.load(sf_args_f))
         except IOError as err:
             raise UserError(f'--slideflow: {err}')
+        if args.slideflow_kwargs.model_type not in ('categorical', 'linear'):
+            raise UserError(f'Unknown slideflow model type {args.slideflow_kwargs.model_type}, must be "categorical" or "linear"')
+        if args.slideflow_kwargs.model_type == 'linear':
+            interp_embed = True
         args.training_set_kwargs = dnnlib.EasyDict(class_name='training.slideflow_dataset.SlideflowIterator', path=slideflow, use_labels=cond, max_size=None, xflip=False)
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
@@ -195,8 +200,8 @@ def setup_training_loop_kwargs(
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
 
-    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
-    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, interp_embed=interp_embed, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
+    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), interp_embed=interp_embed, mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
