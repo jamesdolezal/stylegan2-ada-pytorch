@@ -40,10 +40,10 @@ def num_range(s: str) -> List[int]:
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--seeds', type=num_range, help='List of random seeds')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
-@click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
 def generate_images(
     ctx: click.Context,
     network_pkl: str,
@@ -51,8 +51,8 @@ def generate_images(
     truncation_psi: float,
     noise_mode: str,
     outdir: str,
-    class_idx: Optional[int],
-    projected_w: Optional[str]
+    projected_w: Optional[str],
+    linear: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -89,16 +89,16 @@ def generate_images(
     from scipy.interpolate import interp1d
     import imageio
 
-    label_first = torch.zeros([1, G.c_dim], device=device)
-    label_first[:, 1] = 1
-    label_second = torch.zeros([1, G.c_dim], device=device)
-    label_second[:, 0] = 1
-
-    embedding_first = G.mapping.embed(label_first).cpu().numpy()
-    embedding_second = G.mapping.embed(label_second).cpu().numpy()
-    interpolated_embedding = interp1d([0,99], np.vstack([embedding_first, embedding_second]), axis=0)
-    G.mapping = EmbeddingMappingNetwork(G.mapping)
-    E_G = EmbeddingGenerator(G)
+    if not linear:
+        label_first = torch.zeros([1, G.c_dim], device=device)
+        label_first[:, 1] = 1
+        label_second = torch.zeros([1, G.c_dim], device=device)
+        label_second[:, 0] = 1
+        embedding_first = G.mapping.embed(label_first).cpu().numpy()
+        embedding_second = G.mapping.embed(label_second).cpu().numpy()
+        interpolated_embedding = interp1d([0,99], np.vstack([embedding_first, embedding_second]), axis=0)
+        G.mapping = EmbeddingMappingNetwork(G.mapping)
+        E_G = EmbeddingGenerator(G)
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
@@ -107,9 +107,13 @@ def generate_images(
         video = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=10, codec='libx264', bitrate='16M')
         print (f'Saving optimization progress video "{outdir}/proj.mp4"')
 
-        for embed_idx in range(100):
-            embed = torch.from_numpy(np.expand_dims(interpolated_embedding(embed_idx), axis=0)).to(device)
-            img = E_G(z, embed, truncation_psi=truncation_psi, noise_mode=noise_mode)
+        for interp_idx in range(100):
+            if linear:
+                torch_interp = torch.tensor([[interp_idx/100]]).to(device)
+                img = G(z, torch_interp, truncation_psi=truncation_psi, noise_mode=noise_mode)
+            else:
+                embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
+                img = E_G(z, embed, truncation_psi=truncation_psi, noise_mode=noise_mode)
             img = (img + 1) * (255/2)
             img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
             video.append_data(img)

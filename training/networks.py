@@ -15,6 +15,8 @@ from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from torch_utils.ops import fma
 
+#TODO: implement support for missing class labels
+
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
