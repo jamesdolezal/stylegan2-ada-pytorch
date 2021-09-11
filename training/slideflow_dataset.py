@@ -29,6 +29,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         seed                    = None,             # Tensorflow seed for random sampling
         xflip                   = False,            # Bool indicating whether data should be augmented (flip/rotate)
         manifest                = None,             # Manifest mapping tfrecord names to number of total tiles
+        infinite                = True,             # Inifitely loop through dataset
         **kwargs                                    # Kwargs for Dataset base class
     ):
         self.paths = paths
@@ -37,6 +38,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         self.num_replicas = num_replicas
         self.augment = 'xyr' if xflip else False
         self.manifest = manifest
+        self.infinite = infinite
         if self.manifest is not None:
             self.num_tiles = sum([self.manifest[t]['total'] for t in self.manifest])
         else:
@@ -93,6 +95,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
                                                                           label_parser=self._parser,
                                                                           standardize=False,
                                                                           augment=self.augment,
+                                                                          finite=(not self.infinite),
                                                                           manifest=self.manifest)
 
         for i, (image, label) in enumerate(dataset):
@@ -124,6 +127,7 @@ class SlideflowIterator(InterleaveIterator):
         seed                    = None,             # Tensorflow seed for random sampling
         xflip                   = False,            # Bool indicating whether data should be augmented (flip/rotate)
         use_labels              = False,            # Enable conditioning labels?
+        infinite                = True,             # Infinite dataset looping
         **kwargs                                    # Kwargs for Dataset base class
     ):
         self.tile_px = tile_px
@@ -163,6 +167,7 @@ class SlideflowIterator(InterleaveIterator):
             seed=seed,
             xflip=xflip,
             manifest=sf_dataset.get_manifest(),
+            infinite=infinite,
             **kwargs
         )
 
