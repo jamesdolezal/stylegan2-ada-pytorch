@@ -35,7 +35,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         self.tile_px = tile_px
         self.rank = rank
         self.num_replicas = num_replicas
-        self.augment = xflip
+        self.augment = 'xyr' if xflip else False
         self.manifest = manifest
         if self.manifest is not None:
             self.num_tiles = sum([self.manifest[t]['total'] for t in self.manifest])
