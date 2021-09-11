@@ -30,6 +30,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         xflip                   = False,            # Bool indicating whether data should be augmented (flip/rotate)
         manifest                = None,             # Manifest mapping tfrecord names to number of total tiles
         infinite                = True,             # Inifitely loop through dataset
+        max_size                = None,             # Artificially limit dataset size, useful for metrics
         **kwargs                                    # Kwargs for Dataset base class
     ):
         self.paths = paths
@@ -39,6 +40,8 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         self.augment = 'xyr' if xflip else False
         self.manifest = manifest
         self.infinite = infinite
+        self.max_size = max_size
+        print(f"Dataset has max size: {max_size}")
         if self.manifest is not None:
             self.num_tiles = sum([self.manifest[t]['total'] for t in self.manifest])
         else:
@@ -99,6 +102,8 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
                                                                           manifest=self.manifest)
 
         for i, (image, label) in enumerate(dataset):
+            if self.max_size and i > self.max_size:
+                break
             if i % self.num_replicas == self.rank:
                 yield image.numpy(), label.numpy()
             else:
@@ -128,6 +133,7 @@ class SlideflowIterator(InterleaveIterator):
         xflip                   = False,            # Bool indicating whether data should be augmented (flip/rotate)
         use_labels              = False,            # Enable conditioning labels?
         infinite                = True,             # Infinite dataset looping
+        max_size                = None,             # Artificially limit dataset size, useful for metrics
         **kwargs                                    # Kwargs for Dataset base class
     ):
         self.tile_px = tile_px
@@ -168,6 +174,7 @@ class SlideflowIterator(InterleaveIterator):
             xflip=xflip,
             manifest=sf_dataset.get_manifest(),
             infinite=infinite,
+            max_size=max_size,
             **kwargs
         )
 

@@ -116,6 +116,7 @@ def setup_training_loop_kwargs(
     assert data is None or isinstance(data, str)
     assert slideflow is None or isinstance(slideflow, str)
     interp_embed = False
+    args.slideflow_kwargs = {}
     if data is not None:
         args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=cond, max_size=None, xflip=False)
     elif slideflow is not None:

@@ -38,7 +38,7 @@ def list_valid_metrics():
 
 def calc_metric(metric, **kwargs): # See metric_utils.MetricOptions for the full list of arguments.
     assert is_valid_metric(metric)
-    print(f"[James] Starting calculation for metric {metric}...")
+    print(f"Starting calculation for metric {metric}...")
     opts = metric_utils.MetricOptions(**kwargs)
 
     # Calculate.
