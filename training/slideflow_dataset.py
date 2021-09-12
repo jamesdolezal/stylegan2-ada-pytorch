@@ -149,7 +149,7 @@ class SlideflowIterator(InterleaveIterator):
         if use_labels and outcome_label_headers is not None:
             if isinstance(outcome_label_headers, list) and len(outcome_label_headers) > 1:
                 raise UserError("Only one outcome_label_header is supported at a time.")
-            outcome_labels, _ = sf_dataset.get_labels_from_annotations(outcome_label_headers, use_float=(model_type == 'linear'))
+            outcome_labels, _ = sf_dataset.get_labels_from_annotations(outcome_label_headers, use_float=(model_type == 'linear'), verbose=False)
             outcome_labels = {k:v['label'] for k, v in outcome_labels.items()}
             outcome_vals = np.array(list(outcome_labels.values()))
             if model_type == 'categorical':
