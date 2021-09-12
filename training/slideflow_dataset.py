@@ -2,15 +2,17 @@ import numpy as np
 import os
 import logging
 
-logging.getLogger("tensorflow").setLevel(logging.ERROR)
+'''logging.getLogger("tensorflow").setLevel(logging.ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 import tensorflow as tf
-assert(not tf.test.is_gpu_available())
-import slideflow.io.tfrecords
+assert(not tf.test.is_gpu_available())'''
+from slideflow.io.reader import interleave_tfrecords
 import slideflow as sf
 import torch
-del os.environ['CUDA_VISIBLE_DEVICES']
+#del os.environ['CUDA_VISIBLE_DEVICES']
+
+#TODO: log the categorical outcome assignments from slideflow
 
 def to_onehot(val, max):
     onehot = np.zeros(max, dtype=np.int64)
@@ -48,7 +50,7 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
 
 
         if seed is not None:
-            tf.random.set_seed(seed)
+            np.random.set_seed(seed)
 
     @property
     def name(self):
@@ -84,27 +86,26 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         return False
 
     @staticmethod
-    def _parser(record, base_parser, **kwargs):
-        slide, image = base_parser(record)
+    def _parser(image, slide):
         label = [0]
-        image = tf.transpose(image, perm=(2, 0, 1)) # HWC => CHW
+        image = image.transpose(2, 0, 1) # HWC => CHW
         return image, label
 
     def __iter__(self):
-        dataset, _, self.num_tiles = sf.io.tfrecords.interleave_tfrecords(self.paths,
-                                                                          image_size=self.resolution,
-                                                                          batch_size=None,
-                                                                          label_parser=self._parser,
-                                                                          standardize=False,
-                                                                          augment=self.augment,
-                                                                          finite=(not self.infinite),
-                                                                          manifest=self.manifest)
+        dataset, _, self.num_tiles = interleave_tfrecords(self.paths,
+                                                          #image_size=self.resolution,
+                                                          #batch_size=None,
+                                                          label_parser=self._parser,
+                                                          standardize=False,
+                                                          augment=self.augment,
+                                                          finite=(not self.infinite),
+                                                          manifest=self.manifest)
 
         for i, (image, label) in enumerate(dataset):
             if self.max_size and i > self.max_size:
                 break
             if i % self.num_replicas == self.rank:
-                yield image.numpy(), label.numpy()
+                yield image.copy(), label
             else:
                 continue
 
@@ -177,17 +178,12 @@ class SlideflowIterator(InterleaveIterator):
             **kwargs
         )
 
-    def _parser(self, record, base_parser, **kwargs):
-        slide, image = base_parser(record)
+    def _parser(self, image, slide):
         if self.labels is not None:
-            def label_lookup(s): return self.labels[s.numpy().decode('utf-8')]
-            label_dtype = tf.int64 if self.model_type == 'categorical' else tf.float32
-            label = tf.py_function(func=label_lookup,
-                                    inp=[slide],
-                                    Tout=label_dtype)
+           label = self.labels[slide]
         else:
             label = 0
-        image = tf.transpose(image, perm=(2, 0, 1)) # HWC => CHW
+        image = image.transpose(2, 0, 1) # HWC => CHW
         return image, label
 
     @property

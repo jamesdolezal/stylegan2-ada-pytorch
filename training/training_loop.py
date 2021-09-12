@@ -9,14 +9,12 @@
 import os
 
 import logging
-logging.getLogger("tensorflow").setLevel(logging.ERROR)
+'''logging.getLogger("tensorflow").setLevel(logging.ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 import tensorflow as tf
-assert(not tf.test.is_gpu_available())
-import slideflow.io.tfrecords
-import slideflow as sf
-del os.environ['CUDA_VISIBLE_DEVICES']
+assert(not tf.test.is_gpu_available())tfrecords
+del os.environ['CUDA_VISIBLE_DEVICES']'''
 
 import time
 import copy
@@ -161,7 +159,7 @@ def training_loop(
 
     if training_set_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs, **slideflow_kwargs) # subclass of training.dataset.Dataset
-        training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, num_workers=0))
+        training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, num_workers=1))
     else:
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
         training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)
