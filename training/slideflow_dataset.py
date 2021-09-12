@@ -41,7 +41,6 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         self.manifest = manifest
         self.infinite = infinite
         self.max_size = max_size
-        print(f"Dataset has max size: {max_size}")
         if self.manifest is not None:
             self.num_tiles = sum([self.manifest[t]['total'] for t in self.manifest])
         else:

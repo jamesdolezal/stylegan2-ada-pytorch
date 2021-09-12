@@ -179,7 +179,9 @@ class ProgressMonitor:
 
 #----------------------------------------------------------------------------
 
-def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1, batch_size=64, data_loader_kwargs=None, max_items=None, **stats_kwargs):
+def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1,
+                                      batch_size=64, data_loader_kwargs=None, max_items=None, **stats_kwargs):
+    print("Computing feature stats for dataset...")
     if opts.dataset_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
         num_workers = 0
@@ -213,10 +215,13 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     # Initialize.
     if hasattr(dataset, '__len__'):
         num_items = len(dataset)
+        if max_items is not None:
+            num_items = min(num_items, max_items)
     else:
         num_items = dataset.num_tiles
-    if max_items is not None:
-        num_items = min(num_items, max_items)
+        if max_items is not None:
+            num_items = min(num_items, max_items)
+            dataset.max_size = max_items
     stats = FeatureStats(max_items=num_items, **stats_kwargs)
     progress = opts.progress.sub(tag='dataset features', num_items=num_items, rel_lo=rel_lo, rel_hi=rel_hi)
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
@@ -226,7 +231,8 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
         item_subset = None
     else:
         item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
-    for images, _labels in tqdm(iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs)), position=opts.rank):
+    dataset_iter = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
+    for images, _labels in tqdm(dataset_iter, total=max_items // batch_size, position=opts.rank, ncols=80, ascii=False):
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
         features = detector(images.to(opts.device), **detector_kwargs)
@@ -243,7 +249,9 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
 #----------------------------------------------------------------------------
 
-def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1, batch_size=64, batch_gen=None, jit=False, **stats_kwargs):
+def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1,
+                                        batch_size=64, batch_gen=None, jit=False, **stats_kwargs):
+    print("Computing feature stats for generator...")
     if batch_gen is None:
         batch_gen = min(batch_size, 4)
     assert batch_size % batch_gen == 0
@@ -251,7 +259,11 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     # Setup generator and load labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
     if opts.dataset_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
-        dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, **opts.slideflow_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
+        dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs,
+                                                      **opts.slideflow_kwargs,
+                                                      rank=opts.rank,
+                                                      num_replicas=opts.num_gpus,
+                                                      infinite=False) # subclass of training.dataset.Dataset
     else:
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
@@ -271,13 +283,18 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     stats = FeatureStats(**stats_kwargs)
     assert stats.max_items is not None
     progress = opts.progress.sub(tag='generator features', num_items=stats.max_items, rel_lo=rel_lo, rel_hi=rel_hi)
-    detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
+    detector = get_feature_detector(url=detector_url,
+                                    device=opts.device,
+                                    num_gpus=opts.num_gpus,
+                                    rank=opts.rank,
+                                    verbose=progress.verbose)
 
     # Length of dataset (support for slideflow datasets)
     if hasattr(dataset, '__len__'):
         dataset_len = len(dataset)
     else:
         dataset_len = dataset.num_tiles
+        dataset.max_size = stats.max_items
 
     # Main loop.
     while not stats.is_full():
