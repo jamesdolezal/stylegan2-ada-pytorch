@@ -22,7 +22,6 @@ import click
 import numpy as np
 import PIL.Image
 from tqdm import tqdm
-from slideflow_utils import slideflow_iterator
 
 #----------------------------------------------------------------------------
 
@@ -394,6 +393,7 @@ def convert_dataset(
     labels = []
 
     if slideflow:
+        from slideflow_utils import slideflow_iterator
         num_files, input_iter = slideflow_iterator(source, subfolder_labels=subfolder_labels) #not passing transform_image
         for idx, image in tqdm(enumerate(input_iter), total=num_files):
             idx_str = f'{idx:08d}'

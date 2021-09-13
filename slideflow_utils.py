@@ -5,6 +5,9 @@ import json
 from os.path import join, isfile, isdir, exists
 import threading
 
+# This submodule is now deprecated, as slideflow tfrecords can now be read
+# during training, without need for dataset conversion
+raise DeprecationWarning
 
 FEATURE_DESCRIPTION = {'slide':    	tf.io.FixedLenFeature([], tf.string),
                        'image_raw':	tf.io.FixedLenFeature([], tf.string),

@@ -169,22 +169,6 @@ def training_loop(
         print('Label shape:', training_set.label_shape)
         print()
 
-    '''# Tests dataset sampling speed
-    from tqdm import tqdm
-    if rank == 0:
-        pb = tqdm(training_set_iterator, position=rank, ncols=80)
-        t = time.time()
-        latency = []
-    else:
-        pb = training_set_iterator#iter(training_set)
-    for i in pb:
-        if rank == 0:
-            new_t = time.time()
-            latency += [new_t-t]
-            pb.update(batch_size//num_gpus)
-            pb.set_description(f'Latency: {np.median(latency):4f}')
-            t = new_t'''
-
     # Construct networks.
     if rank == 0:
         print('Constructing networks...')

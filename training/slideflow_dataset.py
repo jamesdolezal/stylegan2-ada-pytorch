@@ -3,7 +3,6 @@ import random
 from slideflow.io.reader import interleave_tfrecords
 import slideflow as sf
 import torch
-#del os.environ['CUDA_VISIBLE_DEVICES']
 
 #TODO: log the categorical outcome assignments from slideflow
 
@@ -86,8 +85,6 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         dataset, _, self.num_tiles = interleave_tfrecords(self.paths,
-                                                          #image_size=self.resolution,
-                                                          #batch_size=None,
                                                           label_parser=self._parser,
                                                           standardize=False,
                                                           augment=self.augment,
