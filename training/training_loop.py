@@ -7,15 +7,6 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import os
-
-import logging
-'''logging.getLogger("tensorflow").setLevel(logging.ERROR)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-import tensorflow as tf
-assert(not tf.test.is_gpu_available())tfrecords
-del os.environ['CUDA_VISIBLE_DEVICES']'''
-
 import time
 import copy
 import json
@@ -32,6 +23,8 @@ from torch_utils.ops import grid_sample_gradfix
 
 import legacy
 from metrics import metric_main
+
+# TODO: Fix seg fault in sample image generation
 
 #----------------------------------------------------------------------------
 

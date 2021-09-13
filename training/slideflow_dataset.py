@@ -1,12 +1,5 @@
 import numpy as np
-import os
-import logging
-
-'''logging.getLogger("tensorflow").setLevel(logging.ERROR)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-import tensorflow as tf
-assert(not tf.test.is_gpu_available())'''
+import random
 from slideflow.io.reader import interleave_tfrecords
 import slideflow as sf
 import torch
@@ -141,6 +134,7 @@ class SlideflowIterator(InterleaveIterator):
         self.model_type = model_type
         self.outcome_label_headers = outcome_label_headers
         self.use_labels = use_labels
+        self.label_prob = None
 
         assert model_type in ('categorical', 'linear')
 
@@ -151,15 +145,16 @@ class SlideflowIterator(InterleaveIterator):
                 raise UserError("Only one outcome_label_header is supported at a time.")
             outcome_labels, _ = sf_dataset.get_labels_from_annotations(outcome_label_headers, use_float=(model_type == 'linear'), verbose=False)
             outcome_labels = {k:v['label'] for k, v in outcome_labels.items()}
-            outcome_vals = np.array(list(outcome_labels.values()))
+            outcome_vals = list(outcome_labels.values())
             if model_type == 'categorical':
-                self.max_label = np.max(outcome_vals)
+                self.max_label = max(outcome_vals)
                 self.labels = {k:to_onehot(v, self.max_label+1) for k,v in outcome_labels.items()}
-                self._all_labels = list(self.labels.values())
+                self.unique_labels = np.array(list(set(outcome_vals)))
+                _all_labels = np.array(list(outcome_labels.values()))
+                self.label_prob = np.array([np.sum(_all_labels == i) for i in self.unique_labels]) / len(_all_labels)
             else:
                 normalized_vals = (outcome_vals - np.min(outcome_vals))/np.ptp(outcome_vals)
                 self.labels = {k:[normalized_vals[i]] for i, k in enumerate(outcome_labels.keys())}
-
         else:
             self.max_label = 0
             self.labels = None
@@ -179,7 +174,7 @@ class SlideflowIterator(InterleaveIterator):
 
     def _parser(self, image, slide):
         if self.labels is not None:
-           label = self.labels[slide]
+           label = self.labels[slide].copy()
         else:
             label = 0
         image = image.transpose(2, 0, 1) # HWC => CHW
@@ -212,7 +207,8 @@ class SlideflowIterator(InterleaveIterator):
 
     def get_label(self, idx):
         if self.use_labels and self.model_type == 'categorical':
-            return self._all_labels[np.random.choice(range(len(self._all_labels)))]
+            label = random.choices(self.unique_labels, weights=self.label_prob, k=1)[0]
+            return to_onehot(label, self.max_label+1).copy()
         elif self.use_labels:
             return [np.random.rand()]
         else:

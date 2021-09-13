@@ -17,14 +17,6 @@ import tempfile
 import torch
 import dnnlib
 
-import logging
-'''logging.getLogger("tensorflow").setLevel(logging.ERROR)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-import tensorflow as tf
-assert(not tf.test.is_gpu_available())
-del os.environ['CUDA_VISIBLE_DEVICES']'''
-
 from training import training_loop
 from metrics import metric_main
 from torch_utils import training_stats
