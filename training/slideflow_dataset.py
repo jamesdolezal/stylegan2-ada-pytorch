@@ -92,7 +92,8 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
                                                           standardize=False,
                                                           augment=self.augment,
                                                           finite=(not self.infinite),
-                                                          manifest=self.manifest)
+                                                          manifest=self.manifest,
+                                                          seed=self.seed)
         for i, (image, label) in enumerate(dataset):
             if self.max_size and i > self.max_size:
                 break

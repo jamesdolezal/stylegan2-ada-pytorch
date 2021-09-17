@@ -11,6 +11,8 @@ import time
 import copy
 import json
 import pickle
+import training
+import random
 import psutil
 import PIL.Image
 import numpy as np
@@ -139,6 +141,7 @@ def training_loop(
     start_time = time.time()
     device = torch.device('cuda', rank)
     np.random.seed(random_seed * num_gpus + rank)
+    random.seed(random_seed)          # Used for slideflow dataset interleaving
     torch.manual_seed(random_seed * num_gpus + rank)
     torch.backends.cudnn.benchmark = cudnn_benchmark    # Improves training speed.
     torch.backends.cuda.matmul.allow_tf32 = allow_tf32  # Allow PyTorch to internally use tf32 for matmul
@@ -151,7 +154,7 @@ def training_loop(
         print('Loading training set...')
 
     if training_set_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
-        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs, **slideflow_kwargs, infinite=True) # subclass of training.dataset.Dataset
+        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs, **slideflow_kwargs, infinite=True, rank=rank, num_replicas=num_gpus, seed=random_seed)
         training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, num_workers=1))
     else:
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
