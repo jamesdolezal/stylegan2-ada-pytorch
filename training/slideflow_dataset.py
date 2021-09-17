@@ -25,6 +25,8 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         manifest                = None,             # Manifest mapping tfrecord names to number of total tiles
         infinite                = True,             # Inifitely loop through dataset
         max_size                = None,             # Artificially limit dataset size, useful for metrics
+        balance                 = None,
+        annotations             = None,
         **kwargs                                    # Kwargs for Dataset base class
     ):
         self.paths = paths
@@ -35,14 +37,13 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
         self.manifest = manifest
         self.infinite = infinite
         self.max_size = max_size
+        self.balance = balance
+        self.annotations = annotations
+        self.seed = seed
         if self.manifest is not None:
             self.num_tiles = sum([self.manifest[t]['total'] for t in self.manifest])
         else:
             self.num_tiles = None
-
-
-        if seed is not None:
-            np.random.set_seed(seed)
 
     @property
     def name(self):
@@ -85,6 +86,8 @@ class InterleaveIterator(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         dataset, _, self.num_tiles = interleave_tfrecords(self.paths,
+                                                          balance=self.balance,
+                                                          annotations=self.annotations,
                                                           label_parser=self._parser,
                                                           standardize=False,
                                                           augment=self.augment,
@@ -155,6 +158,7 @@ class SlideflowIterator(InterleaveIterator):
         else:
             self.max_label = 0
             self.labels = None
+            outcome_labels = None
 
         super().__init__(
             paths=sf_dataset.get_tfrecords(),
@@ -166,6 +170,8 @@ class SlideflowIterator(InterleaveIterator):
             manifest=sf_dataset.get_manifest(),
             infinite=infinite,
             max_size=max_size,
+            annotations=outcome_labels,
+            balance=('BALANCE_BY_CATEGORY' if outcome_labels is not None else None),
             **kwargs
         )
 
