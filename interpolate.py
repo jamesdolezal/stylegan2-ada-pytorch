@@ -91,9 +91,9 @@ def generate_images(
 
     if not linear:
         label_first = torch.zeros([1, G.c_dim], device=device)
-        label_first[:, 1] = 1
+        label_first[:, 0] = 1
         label_second = torch.zeros([1, G.c_dim], device=device)
-        label_second[:, 0] = 1
+        label_second[:, 1] = 1
         embedding_first = G.mapping.embed(label_first).cpu().numpy()
         embedding_second = G.mapping.embed(label_second).cpu().numpy()
         interpolated_embedding = interp1d([0,99], np.vstack([embedding_first, embedding_second]), axis=0)
