@@ -139,7 +139,7 @@ class SlideflowIterator(InterleaveIterator):
 
         assert model_type in ('categorical', 'linear')
 
-        project = sf.SlideflowProject(project_path, gpu=None)
+        project = sf.Project(project_path, gpu=None)
         sf_dataset = project.get_dataset(tile_px, tile_um, filters=filters, filter_blank=filter_blank, verification=None)
         if use_labels and outcome_label_headers is not None:
             if isinstance(outcome_label_headers, list) and len(outcome_label_headers) > 1:
@@ -155,7 +155,7 @@ class SlideflowIterator(InterleaveIterator):
                 self.label_prob = np.array([np.sum(_all_labels == i) for i in self.unique_labels]) / len(_all_labels)
             else:
                 normalized_vals = (outcome_vals - np.min(outcome_vals))/np.ptp(outcome_vals)
-                self.labels = {k:[normalized_vals[i]] for i, k in enumerate(outcome_labels.keys())}
+                self.labels = {k:normalized_vals[i] for i, k in enumerate(outcome_labels.keys())}
         else:
             self.max_label = 0
             self.labels = None

@@ -834,10 +834,12 @@ class Discriminator(torch.nn.Module):
         num_fp16_res        = 0,        # Use FP16 for the N highest resolutions.
         conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
         cmap_dim            = None,     # Dimensionality of mapped conditioning label, None = default.
-        block_kwargs        = {},       # Arguments for DiscriminatorBlock.
+        inst_noise_sigma    = 0,        # Instance noise sigma. 0 = disable instance noise.
         interp_embed        = False,    # Interpolate embedding, used for linear labels
+        block_kwargs        = {},       # Arguments for DiscriminatorBlock.
         mapping_kwargs      = {},       # Arguments for MappingNetwork.
         epilogue_kwargs     = {},       # Arguments for DiscriminatorEpilogue.
+
     ):
         super().__init__()
         self.c_dim = c_dim
@@ -845,8 +847,11 @@ class Discriminator(torch.nn.Module):
         self.img_resolution_log2 = int(np.log2(img_resolution))
         self.img_channels = img_channels
         self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
+        self.inst_noise_sigma = inst_noise_sigma
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+
+        assert 0 <= inst_noise_sigma <= 1
 
         if cmap_dim is None:
             cmap_dim = channels_dict[4]
@@ -872,6 +877,9 @@ class Discriminator(torch.nn.Module):
 
     def forward(self, img, c, **block_kwargs):
         x = None
+        if self.inst_noise_sigma:
+            noise = torch.randn_like(img).to(img.device) * self.inst_noise_sigma
+            img = (img + noise).clamp(0, 1)
         for res in self.block_resolutions:
             block = getattr(self, f'b{res}')
             x, img = block(x, img, **block_kwargs)
