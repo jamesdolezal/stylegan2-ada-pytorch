@@ -153,9 +153,9 @@ def training_loop(
     if rank == 0:
         print('Loading training set...')
 
-    if training_set_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
-        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs, **slideflow_kwargs, infinite=True, rank=rank, num_replicas=num_gpus, seed=random_seed)
-        training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, num_workers=1))
+    if training_set_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs)
+        training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     else:
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
         training_set_sampler = misc.InfiniteSampler(dataset=training_set, rank=rank, num_replicas=num_gpus, seed=random_seed)

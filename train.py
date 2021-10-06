@@ -16,11 +16,22 @@ import json
 import tempfile
 import torch
 import dnnlib
+import copy
 
 from training import training_loop
 from metrics import metric_main
 from torch_utils import training_stats
 from torch_utils import custom_ops
+
+import slideflow as sf
+
+#----------------------------------------------------------------------------
+
+def load_project(sf_kwargs):
+    dataset_kwargs = {k:v for k,v in sf_kwargs.items() if k in ('tile_px', 'tile_um', 'filters', 'filter_blank')}
+    project = sf.Project(sf_kwargs['project_path'])
+    dataset = project.get_dataset(**dataset_kwargs)
+    return project, dataset
 
 #----------------------------------------------------------------------------
 
@@ -121,18 +132,37 @@ def setup_training_loop_kwargs(
             raise UserError(f'Unknown slideflow model type {args.slideflow_kwargs.model_type}, must be "categorical" or "linear"')
         if args.slideflow_kwargs.model_type == 'linear':
             interp_embed = True
-        args.training_set_kwargs = dnnlib.EasyDict(class_name='training.slideflow_dataset.SlideflowIterator', path=slideflow, use_labels=cond, max_size=None, xflip=False)
+        project, dataset = load_project(args.slideflow_kwargs)
+        labels, _ = dataset.labels(args.slideflow_kwargs['outcome_label_headers'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.InterleaveIterator',
+                                                   tfrecords=dataset.tfrecords(),
+                                                   img_size=args.slideflow_kwargs['tile_px'],
+                                                   labels=labels,
+                                                   use_labels=cond,
+                                                   augment='xyr',
+                                                   standardize=False,
+                                                   num_tiles=dataset.num_tiles,
+                                                   prob_weights=dataset.prob_weights,
+                                                   model_type=args.slideflow_kwargs['model_type'],
+                                                   onehot=True)
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
-        training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs, **args.slideflow_kwargs) # subclass of training.dataset.Dataset
-        args.training_set_kwargs.resolution = training_set.resolution # be explicit about resolution
-        args.training_set_kwargs.use_labels = training_set.has_labels # be explicit about labels
-        if data is not None:
-            args.training_set_kwargs.max_size = len(training_set) # be explicit about dataset size
-        else:
+        if slideflow is not None:
+            args.training_set_kwargs.resolution = args.slideflow_kwargs.tile_px
+            args.training_set_kwargs.use_labels = hasattr(args.slideflow_kwargs, 'outcome_label_headers')
             args.training_set_kwargs.max_size = None
-        desc = training_set.name
-        del training_set # conserve memory
+            with open(os.path.join(args.slideflow_kwargs.project_path, 'settings.json'), 'r') as sf_settings_f:
+                desc = json.load(sf_settings_f)['name']
+        else:
+            training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs, **args.slideflow_kwargs) # subclass of training.dataset.Dataset
+            args.training_set_kwargs.resolution = training_set.resolution # be explicit about resolution
+            args.training_set_kwargs.use_labels = training_set.has_labels # be explicit about labels
+            if data is not None:
+                args.training_set_kwargs.max_size = len(training_set) # be explicit about dataset size
+            else:
+                args.training_set_kwargs.max_size = None
+            desc = training_set.name
+            del training_set # conserve memory
     except IOError as err:
         raise UserError(f'--data: {err}')
 
@@ -161,6 +191,8 @@ def setup_training_loop_kwargs(
     if mirror:
         desc += '-mirror'
         args.training_set_kwargs.xflip = True
+    else:
+        args.training_set_kwargs.xflip = False
 
     # ------------------------------------
     # Base config: cfg, gamma, kimg, batch
@@ -525,14 +557,23 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     cur_run_id = max(prev_run_ids, default=-1) + 1
     args.run_dir = os.path.join(outdir, f'{cur_run_id:05d}-{run_desc}')
     assert not os.path.exists(args.run_dir)
+    training_path = args.slideflow_kwargs.project_path if hasattr(args, 'slideflow_kwargs') else args.training_set_kwargs.path
+
+
+    if hasattr(args, 'slideflow_kwargs'):
+        args_for_print = copy.deepcopy(args)
+        args_for_print.training_set_kwargs.tfrecords = '[...]'
+        args_for_print.training_set_kwargs.labels = '[...]'
+    else:
+        args_for_print = args
 
     # Print options.
     print()
     print('Training options:')
-    print(json.dumps(args, indent=2))
+    print(json.dumps(args_for_print, indent=2))
     print()
     print(f'Output directory:   {args.run_dir}')
-    print(f'Training data:      {args.training_set_kwargs.path}')
+    print(f'Training data:      {training_path}')
     print(f'Training duration:  {args.total_kimg} kimg')
     print(f'Number of GPUs:     {args.num_gpus}')
     print(f'Number of images:   {args.training_set_kwargs.max_size}')
@@ -544,6 +585,9 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     if hasattr(args, 'slideflow_kwargs'):
         print('Slideflow options:')
         print(json.dumps(args.slideflow_kwargs, indent=2))
+        print('Setting up TFRecord indices...')
+        project, dataset = load_project(args.slideflow_kwargs)
+        dataset.build_index(False)
 
     # Dry run?
     if dry_run:

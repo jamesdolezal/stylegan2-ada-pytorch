@@ -182,10 +182,11 @@ class ProgressMonitor:
 def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1,
                                       batch_size=64, data_loader_kwargs=None, max_items=None, **stats_kwargs):
     print("Computing feature stats for dataset...")
-    if opts.dataset_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
+    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
-        num_workers = 0
-        dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, **opts.slideflow_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
+        num_workers = 3
+        slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
+        dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, **slideflow_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
     else:
         num_workers = 3
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
@@ -227,7 +228,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
 
     # Main loop.
-    if opts.dataset_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
+    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
         item_subset = None
     else:
         item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
@@ -258,9 +259,10 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
 
     # Setup generator and load labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
-    if opts.dataset_kwargs.class_name == 'training.slideflow_dataset.SlideflowIterator':
+    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+        slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs,
-                                                      **opts.slideflow_kwargs,
+                                                      **slideflow_kwargs,
                                                       rank=opts.rank,
                                                       num_replicas=opts.num_gpus,
                                                       infinite=False) # subclass of training.dataset.Dataset
