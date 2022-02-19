@@ -30,7 +30,7 @@ import slideflow as sf
 def load_project(sf_kwargs):
     dataset_kwargs = {k:v for k,v in sf_kwargs.items() if k in ('tile_px', 'tile_um', 'filters', 'filter_blank')}
     project = sf.Project(sf_kwargs['project_path'])
-    dataset = project.get_dataset(**dataset_kwargs)
+    dataset = project.dataset(**dataset_kwargs)
     return project, dataset
 
 #----------------------------------------------------------------------------
@@ -139,6 +139,7 @@ def setup_training_loop_kwargs(
                                                    img_size=args.slideflow_kwargs['tile_px'],
                                                    labels=labels,
                                                    use_labels=cond,
+                                                   chunk_size=4,
                                                    augment='xyr',
                                                    standardize=False,
                                                    num_tiles=dataset.num_tiles,
