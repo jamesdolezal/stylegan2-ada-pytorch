@@ -184,7 +184,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     print("Computing feature stats for dataset...")
     if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
-        num_workers = 3
+        num_workers = 1
         slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, **slideflow_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
     else:
