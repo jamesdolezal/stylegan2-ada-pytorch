@@ -89,12 +89,11 @@ def generate_images(
     if G.c_dim != 0:
         if class_idx is None and not embed:
             ctx.fail('Must specify class label with --class when using a conditional network')
-        label[:, class_idx] = 1
+        if not embed:
+            label[:, class_idx] = 1
     else:
         if class_idx is not None:
             print ('warn: --class=lbl ignored when running on an unconditional network')
-
-    resize = True
 
     if embed:
         print("Generating images using middle embedding...")

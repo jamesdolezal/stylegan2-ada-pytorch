@@ -133,7 +133,12 @@ def setup_training_loop_kwargs(
         if args.slideflow_kwargs.model_type == 'linear':
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
-        labels, _ = dataset.labels(args.slideflow_kwargs['outcome_label_headers'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        if 'outcomes' in args.slideflow_kwargs:
+            labels, _ = dataset.labels(args.slideflow_kwargs['outcomes'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        else:
+            # Here for compatibility with old projects,
+            # which used "outcome_label_headers" instead of "outcomes"
+            labels, _ = dataset.labels(args.slideflow_kwargs['outcome_label_headers'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
         args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.InterleaveIterator',
                                                    tfrecords=dataset.tfrecords(),
                                                    img_size=args.slideflow_kwargs['tile_px'],
@@ -150,7 +155,7 @@ def setup_training_loop_kwargs(
     try:
         if slideflow is not None:
             args.training_set_kwargs.resolution = args.slideflow_kwargs.tile_px
-            args.training_set_kwargs.use_labels = hasattr(args.slideflow_kwargs, 'outcome_label_headers')
+            args.training_set_kwargs.use_labels = hasattr(args.slideflow_kwargs, 'outcome_label_headers') or hasattr(args.slideflow_kwargs, 'outcomes')
             args.training_set_kwargs.max_size = None
             with open(os.path.join(args.slideflow_kwargs.project_path, 'settings.json'), 'r') as sf_settings_f:
                 desc = json.load(sf_settings_f)['name']
