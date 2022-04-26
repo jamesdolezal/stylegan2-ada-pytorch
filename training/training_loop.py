@@ -154,7 +154,8 @@ def training_loop(
         print('Loading training set...')
 
     if training_set_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
-        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs)
+        training_set_kwargs['augment'] = 'xyr'
+        training_set = dnnlib.util.construct_class_by_name(**{k: v for k, v in training_set_kwargs.items() if k not in ('resolution', 'xflip')})
         training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     else:
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
