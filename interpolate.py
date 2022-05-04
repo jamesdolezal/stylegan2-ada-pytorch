@@ -39,19 +39,21 @@ def num_range(s: str) -> List[int]:
 @click.pass_context
 @click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
 @click.option('--seeds', type=num_range, help='List of random seeds')
+@click.option('--start', type=int, help='Starting category for interpolation.')
+@click.option('--end', type=int, help='Ending category for interpolation.')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
-@click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
 def generate_images(
     ctx: click.Context,
     network_pkl: str,
     seeds: Optional[List[int]],
+    start: Optional[int],
+    end: Optional[int],
     truncation_psi: float,
     noise_mode: str,
     outdir: str,
-    projected_w: Optional[str],
     linear: bool,
 ):
     """Generate images using pretrained network pickle.
@@ -90,10 +92,14 @@ def generate_images(
     import imageio
 
     if not linear:
+        if start >= G.c_dim:
+            raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
+        if end >= G.c_dim:
+            raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
         label_first = torch.zeros([1, G.c_dim], device=device)
-        label_first[:, 0] = 1
+        label_first[:, start] = 1
         label_second = torch.zeros([1, G.c_dim], device=device)
-        label_second[:, 1] = 1
+        label_second[:, end] = 1
         embedding_first = G.mapping.embed(label_first).cpu().numpy()
         embedding_second = G.mapping.embed(label_second).cpu().numpy()
         interpolated_embedding = interp1d([0,99], np.vstack([embedding_first, embedding_second]), axis=0)
@@ -105,7 +111,7 @@ def generate_images(
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         video = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
-        print (f'Saving optimization progress video "{outdir}/proj.mp4"')
+        print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
 
         for interp_idx in range(100):
             if linear:
