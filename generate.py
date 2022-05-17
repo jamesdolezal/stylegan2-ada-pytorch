@@ -10,14 +10,14 @@
 
 import os
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import click
-import dnnlib
 import numpy as np
 import PIL.Image
 import torch
 
+import dnnlib
 import legacy
 
 #----------------------------------------------------------------------------
@@ -32,6 +32,10 @@ def num_range(s: str) -> List[int]:
     vals = s.split(',')
     return [int(x) for x in vals]
 
+
+def warn(s: Any) -> str:
+    print('\033[93m' + str(s) + '\033[0m')
+
 #----------------------------------------------------------------------------
 
 @click.command()
@@ -43,6 +47,13 @@ def num_range(s: str) -> List[int]:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--format', help='Image format (png or jpg)', type=str, required=True)
+@click.option('--save-projection', help='Save numpy projection with images', type=bool, default=False)
+@click.option('--resize', help='Resize to target micron/pixel size.', type=bool, default=False)
+@click.option('--gan-um', help='GAN image micron size (um)', type=int)
+@click.option('--gan-px', help='GAN image pixel size', type=int)
+@click.option('--target-um', help='Target image micron size (um)', type=int)
+@click.option('--target-px', help='Target image pixel size', type=int)
 def generate_images(
     ctx: click.Context,
     network_pkl: str,
@@ -50,8 +61,15 @@ def generate_images(
     truncation_psi: float,
     noise_mode: str,
     outdir: str,
+    format: str,
     class_idx: Optional[int],
-    projected_w: Optional[str]
+    projected_w: Optional[str],
+    save_projection: bool,
+    resize: bool,
+    gan_um: Optional[int],
+    gan_px: Optional[int],
+    target_um: Optional[int],
+    target_px: Optional[int],
 ):
     """Generate images using pretrained network pickle.
 
@@ -78,6 +96,11 @@ def generate_images(
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
 
+    if format not in ('png', 'jpg'):
+        ctx.fail('--format must be either "jpg" or "png".')
+    if resize and None in (gan_um, gan_px, target_um, target_px):
+        ctx.fail('If resizing, must supply gan-um, gan-px, target-um, and target-px')
+
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
@@ -88,7 +111,7 @@ def generate_images(
     # Synthesize the result of a W projection.
     if projected_w is not None:
         if seeds is not None:
-            print ('warn: --seeds is ignored when using --projected-w')
+            warn('--seeds is ignored when using --projected-w')
         print(f'Generating images from projected W "{projected_w}"')
         ws = np.load(projected_w)['w']
         ws = torch.tensor(ws, device=device) # pylint: disable=not-callable
@@ -110,7 +133,7 @@ def generate_images(
         label[:, class_idx] = 1
     else:
         if class_idx is not None:
-            print ('warn: --class=lbl ignored when running on an unconditional network')
+            warn('--class=lbl ignored when running on an unconditional network')
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
@@ -118,8 +141,22 @@ def generate_images(
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
         img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
-        np.savez(f'{outdir}/projected_w_{seed:04d}.npz', w=z.cpu().numpy())
+        image = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
+
+        # Resize/crop image.
+        if resize:
+            resize_factor = target_um / gan_um
+            crop_width = int(resize_factor * gan_px)
+            left = gan_px/2 - crop_width/2
+            upper = gan_px/2 - crop_width/2
+            right = left + crop_width
+            lower = upper + crop_width
+            image = image.crop((left, upper, right, lower)).resize((target_px, target_px))
+
+        image.save(f'{outdir}/seed{seed:04d}.{format}', quality=100)
+
+        if save_projection:
+            np.savez(f'{outdir}/projected_w_{seed:04d}.npz', w=z.cpu().numpy())
 
 #----------------------------------------------------------------------------
 

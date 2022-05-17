@@ -9,19 +9,20 @@
 """Generate images using pretrained network pickle."""
 
 import os
-import slideflow as sf
+from io import BytesIO
+from typing import Optional
+
 import click
-import dnnlib
 import numpy as np
 import PIL.Image
+import slideflow as sf
 import torch
-import legacy
-
-from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 from scipy.interpolate import interp1d
 from tqdm import tqdm
-from typing import Optional
-from io import BytesIO
+
+import dnnlib
+import legacy
+from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 #----------------------------------------------------------------------------
 
@@ -33,7 +34,7 @@ from io import BytesIO
 @click.option('--seed', type=int, default=0, help='Starting seed')
 @click.option('--embed', type=bool, default=False, help='Generate images using middle of binary class embedding.')
 @click.option('--name', type=str, default='gan', help='Name of tfrecord.')
-@click.option('--format', type=str, default='PNG', help='TFRecord image format (PNG or JPEG)')
+@click.option('--format', type=str, help='TFRecord image format (PNG or JPEG)')
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)

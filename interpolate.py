@@ -10,28 +10,34 @@
 
 import os
 import re
-from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 from typing import List, Optional
 
 import click
-import dnnlib
+import imageio
 import numpy as np
-import PIL.Image
 import torch
+from PIL import Image
+from scipy.interpolate import interp1d
 
+import dnnlib
 import legacy
+from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 #----------------------------------------------------------------------------
 
 def num_range(s: str) -> List[int]:
     '''Accept either a comma separated list of numbers 'a,b,c' or a range 'a-c' and return as a list of ints.'''
 
-    range_re = re.compile(r'^(\d+)-(\d+)$')
-    m = range_re.match(s)
-    if m:
-        return list(range(int(m.group(1)), int(m.group(2))+1))
-    vals = s.split(',')
-    return [int(x) for x in vals]
+    if os.path.exists(s):
+        with open(s, 'r') as f:
+            return [int(i) for i in f.read().split('\n')]
+    else:
+        range_re = re.compile(r'^(\d+)-(\d+)$')
+        m = range_re.match(s)
+        if m:
+            return list(range(int(m.group(1)), int(m.group(2))+1))
+        vals = s.split(',')
+        return [int(x) for x in vals]
 
 #----------------------------------------------------------------------------
 
@@ -45,7 +51,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
-def generate_images(
+@click.option('--video', help='Save in video (MP4) format. If false, will save individual images.', default=True, show_default=True, type=bool, metavar='BOOL')
+def interpolate(
     ctx: click.Context,
     network_pkl: str,
     seeds: Optional[List[int]],
@@ -55,6 +62,7 @@ def generate_images(
     noise_mode: str,
     outdir: str,
     linear: bool,
+    video: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -88,9 +96,6 @@ def generate_images(
 
     os.makedirs(outdir, exist_ok=True)
 
-    from scipy.interpolate import interp1d
-    import imageio
-
     if not linear:
         if start >= G.c_dim:
             raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
@@ -110,8 +115,9 @@ def generate_images(
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        video = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
-        print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
+        if video:
+            video_file = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
+            print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
 
         for interp_idx in range(100):
             if linear:
@@ -122,11 +128,15 @@ def generate_images(
                 img = E_G(z, embed, truncation_psi=truncation_psi, noise_mode=noise_mode)
             img = (img + 1) * (255/2)
             img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-            video.append_data(img)
-        video.close()
+            if video:
+                video_file.append_data(img)
+            else:
+                Image.fromarray(img).save(f'{outdir}/seed{seed}_interp{interp_idx}.png')
+        if video:
+            video_file.close()
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    generate_images() # pylint: disable=no-value-for-parameter
+    interpolate() # pylint: disable=no-value-for-parameter
 
 #----------------------------------------------------------------------------
