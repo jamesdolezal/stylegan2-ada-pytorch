@@ -51,7 +51,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
-@click.option('--video', help='Save in video (MP4) format. If false, will save individual images.', default=True, show_default=True, type=bool, metavar='BOOL')
+@click.option('--video', help='Save in video (MP4) format. If false, will save side-by-side images.', default=True, show_default=True, type=bool, metavar='BOOL')
+@click.option('--steps', help='Number of interpolation steps.', type=int, default=100, show_default=True)
 def interpolate(
     ctx: click.Context,
     network_pkl: str,
@@ -63,6 +64,7 @@ def interpolate(
     outdir: str,
     linear: bool,
     video: bool,
+    steps: int
 ):
     """Generate images using pretrained network pickle.
 
@@ -89,6 +91,9 @@ def interpolate(
         --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
     """
 
+    if steps < 2:
+        ctx.fail("Steps must be greater than 1.")
+
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
@@ -107,7 +112,7 @@ def interpolate(
         label_second[:, end] = 1
         embedding_first = G.mapping.embed(label_first).cpu().numpy()
         embedding_second = G.mapping.embed(label_second).cpu().numpy()
-        interpolated_embedding = interp1d([0,99], np.vstack([embedding_first, embedding_second]), axis=0)
+        interpolated_embedding = interp1d([0, steps-1], np.vstack([embedding_first, embedding_second]), axis=0)
         G.mapping = EmbeddingMappingNetwork(G.mapping)
         E_G = EmbeddingGenerator(G)
 
@@ -118,10 +123,13 @@ def interpolate(
         if video:
             video_file = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
             print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
+        else:
+            out_img = Image.new('RGB', (299*steps, 299))
+            x_offset = 0
 
-        for interp_idx in range(100):
+        for interp_idx in range(steps):
             if linear:
-                torch_interp = torch.tensor([[interp_idx/100]]).to(device)
+                torch_interp = torch.tensor([[interp_idx/steps]]).to(device)
                 img = G(z, torch_interp, truncation_psi=truncation_psi, noise_mode=noise_mode)
             else:
                 embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
@@ -131,9 +139,13 @@ def interpolate(
             if video:
                 video_file.append_data(img)
             else:
-                Image.fromarray(img).save(f'{outdir}/seed{seed}_interp{interp_idx}.png')
+                out_img.paste(Image.fromarray(img), (x_offset, 0))
+                x_offset += 299
+
         if video:
             video_file.close()
+        else:
+            out_img.save(f'{outdir}/seed{seed}.png')
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":
