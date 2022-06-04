@@ -10,6 +10,7 @@
 
 import os
 import re
+from os.path import join
 from typing import List, Optional
 
 import click
@@ -53,6 +54,7 @@ def num_range(s: str) -> List[int]:
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
 @click.option('--video', help='Save in video (MP4) format. If false, will save side-by-side images.', default=True, show_default=True, type=bool, metavar='BOOL')
 @click.option('--steps', help='Number of interpolation steps.', type=int, default=100, show_default=True)
+@click.option('--merge', help='Merge images side-by-side.', type=bool, default=False, show_default=True)
 def interpolate(
     ctx: click.Context,
     network_pkl: str,
@@ -64,7 +66,8 @@ def interpolate(
     outdir: str,
     linear: bool,
     video: bool,
-    steps: int
+    steps: int,
+    merge: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -121,9 +124,10 @@ def interpolate(
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         if video:
-            video_file = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
-            print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
-        else:
+            video_path = join(outdir, f'seed{seed:04d}.mp4')
+            video_file = imageio.get_writer(video_path, mode='I', fps=30, codec='libx264', bitrate='16M')
+            print (f'Saving optimization progress video "{video_path}"')
+        elif merge:
             out_img = Image.new('RGB', (299*steps, 299))
             x_offset = 0
 
@@ -138,14 +142,16 @@ def interpolate(
             img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
             if video:
                 video_file.append_data(img)
-            else:
+            elif merge:
                 out_img.paste(Image.fromarray(img), (x_offset, 0))
                 x_offset += 299
+            else:
+                Image.fromarray(img).save(join(outdir, f'seed{seed:04d}-{interp_idx:03d}.png'))
 
         if video:
             video_file.close()
-        else:
-            out_img.save(f'{outdir}/seed{seed}.png')
+        elif merge:
+            out_img.save(join(outdir, f'seed{seed:04d}.png'))
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":

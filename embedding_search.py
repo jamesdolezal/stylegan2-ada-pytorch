@@ -26,6 +26,8 @@ from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 if TYPE_CHECKING:
     from slideflow.norm import StainNormalizer
 
+pd.set_option('mode.chained_assignment',None)
+
 #----------------------------------------------------------------------------
 
 def num_range(s: str) -> List[int]:
@@ -478,7 +480,6 @@ class EmbeddingSearch:
 @click.option('--out', type=str, help='Path to target directory in which to save plots and selections.', required=True, metavar='DIR')
 @click.option('--layer', type=str, help='Layer from which to generate feature predictions.', default='postconv', show_default=True)
 @click.option('--backend', type=str, default='tensorflow', help='Backend for Slideflow classifier model.')
-@click.option('--lasso', type=bool, default=False, help='Interactive lasso plot.')
 @click.option('--verbose', type=bool, default=False, help='Verbose output.')
 @click.option('--pc', type=int, required=True, help='Principal component to search.')
 @click.option('--start', type=int, required=True, help='Starting class.')
@@ -487,8 +488,6 @@ class EmbeddingSearch:
 @click.option('--noise-mode', type=str, default='const', required=False, help='GAN noise mode.')
 @click.option('--resize', 'resize_method', type=str, required=False, default='tf_aa', help='Resizing method.')
 @click.option('--batch-size', type=int, required=False, default=16, help='Batch size.')
-@click.option('--export', type=bool, required=False, default=False, help='Export results.')
-@click.option('--scree', type=bool, required=False, default=False, help='Export results.')
 @click.option('--pca-method', type=str, required=False, default='delta', help='Order in which to perform PCA, either "delta" or "raw".')
 @click.option('--pca-dim', type=int, required=False, default=7, help='PCA dimensions.')
 def predict(
@@ -500,7 +499,6 @@ def predict(
     out: str,
     layer: str,
     backend: str,
-    lasso: bool,
     verbose: bool,
     pc: int,
     start: int,
@@ -509,8 +507,6 @@ def predict(
     noise_mode: str,
     resize_method: str,
     batch_size: int,
-    export: bool,
-    scree: bool,
     pca_method: str,
     pca_dim: int,
 ):
@@ -599,19 +595,13 @@ def predict(
     if pca_method not in ("delta", "raw"):
         ctx.fail(f"Invalid pca-method '{pca_method}'")
 
-    print(f"Detected {len(seeds)} seeds")
-    print(f"Using resize method '{resize_method}'")
+    print(f"Performing PCA reduction on {len(seeds)} seeds.")
+    print(f"Using resize method '{resize_method}'.")
 
-    class_swap_seeds = []
-    class_swap_features = []
-    strong_class_swap_seeds = []
-    calculated_features = []
-    plot_labels = []
-    pred_labels = []
+    predictions = {0: [], 1: []}
+    features = {0: [], 1: []}
     swap_labels = []
-    gan_labels = []
     img_seeds = []
-    used_embed = []
     gan_kwargs = dict(
         truncation_psi=truncation_psi,
         noise_mode=noise_mode
@@ -660,100 +650,122 @@ def predict(
     model = tf.keras.models.load_model(classifier_path)
     classifier_features = sf.model.Features.from_model(model, layers=layer)
 
+    # --- GAN-Classifier pipeline ---------------------------------------------
+
+    def features_from_gan(z, embed):
+        img_batch = E_G(z, embed.expand(z.shape[0], -1), **gan_kwargs)
+        img_batch = utils.process_gan_batch(img_batch, **process_kwargs)
+        pred = model.predict(img_batch)[:, 0]
+        features_out = tf.reshape(classifier_features(img_batch), (z.shape[0], -1)).numpy()
+        return pred, features_out
+
+    # -------------------------------------------------------------------------
+
     # Calculate classifier features for GAN images created from seeds.
     # Calculation happens in batches to improve computational efficiency.
     pb = tqdm(total=len(seeds), leave=False)
     for seed_batch in batch(seeds, batch_size):
-        n_seeds = len(seed_batch)
-        for s in seed_batch:
-            img_seeds += [s, s]
-
-        # Create and process GAN images.
+        # noise + embedding -> GAN -> Classifier -> Predictions, Features
         z = torch.stack([noise_tensor(s, z_dim=E_G.z_dim)[0] for s in seed_batch]).to(device)
-        img0_batch = E_G(z, embed0.expand(n_seeds, -1), **gan_kwargs)
-        img1_batch = E_G(z, embed1.expand(n_seeds, -1), **gan_kwargs)
-        img0_batch = utils.process_gan_batch(img0_batch, **process_kwargs)
-        img1_batch = utils.process_gan_batch(img1_batch, **process_kwargs)
+        pred0, features0 = features_from_gan(z, embed0)
+        pred1, features1 = features_from_gan(z, embed1)
 
-        # Create model predictions from GAN images.
-        pred0 = model.predict(img0_batch)[:, 0]
-        pred1 = model.predict(img1_batch)[:, 0]
-        features0 = tf.reshape(classifier_features(img0_batch), (n_seeds, -1)).numpy()
-        features1 = tf.reshape(classifier_features(img1_batch), (n_seeds, -1)).numpy()
-
-        # For each seed in the batch, determine if there is "class-swapping",
+        # For each seed in the batch, determine if there ids "class-swapping",
         # where the GAN class label matches the classifier prediction.
         #
         # This may not happen 100% percent of the time even with a perfect GAN
         # and perfect classifier, since both classes have images that are
         # not class-specific (such as empty background, background tissue, etc)
-        for i in range(n_seeds):
-            pred_labels += [pred0[i], pred1[i]]
-            calculated_features += [features0[i], features1[i]]
-            used_embed += [0, 1]
-            plot_labels += [
-                ('Braf-like' if pred0[i] < 0 else 'Ras-like'),
-                ('Braf-like' if pred1[i] < 0 else 'Ras-like')
-            ]
-            gan_labels += ['GAN-Braf-like', 'GAN-Ras-like']
+        for i in range(len(seed_batch)):
+            img_seeds += [seed_batch[i]]
+            predictions[0] += [pred0[i]]
+            predictions[1] += [pred1[i]]
+            features[0] += [features0[i]]
+            features[1] += [features1[i]]
+
             # NOTE: This logic assumes predictions are discretized at 0,
             # which will not be true for categorical outcomes.
             if (pred0[i] < 0) and (pred1[i] > 0):
                 # Class-swapping is observed for this seed.
-                class_swap_seeds += [seed_batch[i]]
-                class_swap_features += [features0[i], features1[i]]
-                class_swap_feature_differences += [features1[i] - features0[i]]
-
                 if (pred0[i] < -0.5) and (pred1[i] > 0.5):
                     # Strong class swapping.
-                    tail = "**"
-                    strong_class_swap_seeds += [seed_batch[i]]
-
-                    # Calculate features for each class
-                    strong_class_swap_features0 += [features0[i]]
-                    strong_class_swap_features1 += [features1[i]]
-                    swap_labels += ['strong_swap', 'strong_swap']
+                    tail = " **"
+                    swap_labels += ['strong_swap']
                 else:
                     # Weak class swapping.
-                    tail = "*"
-                    swap_labels += ['weak_swap', 'weak_swap']
+                    tail = " *"
+                    swap_labels += ['weak_swap']
             elif (pred0[i] > 0) and (pred1[i] < 0):
                 # Predictions are oppositve of what is expected.
                 tail = " (!)"
-                swap_labels += ['no_swap', 'no_swap']
+                swap_labels += ['no_swap']
             else:
                 tail = ""
-                swap_labels += ['no_swap', 'no_swap']
+                swap_labels += ['no_swap']
             if verbose:
                 tqdm.write(f"Seed {seed_batch[i]:<6}: {pred0[i]:.2f}\t{pred1[i]:.2f}{tail}")
-        pb.update(n_seeds)
+        pb.update(len(seed_batch))
     pb.close()
-    print(col.bold("\nFrequency of class-swapping: {:.2f}%\n".format(100 * (len(class_swap_seeds) / len(seeds)))))
-    print(col.bold("\nFrequency of strong class-swapping: {:.2f}%\n".format(100 * (len(strong_class_swap_seeds) / len(seeds)))))
 
-    # PCA and scree plot.
+    # Convert to dataframe.
+    df = pd.DataFrame({
+        'seed': pd.Series(img_seeds),
+        'pred_start': pd.Series(predictions[0]),
+        'pred_end': pd.Series(predictions[1]),
+        'features_start': pd.Series(features[0]).astype(object),
+        'features_end': pd.Series(features[1]).astype(object),
+        'class_swap': pd.Series(swap_labels),
+    })
+    swap_df = df.loc[df.class_swap.isin(['strong_swap', 'weak_swap'])]
+    swap_df.reset_index(drop=True, inplace=True)
+    strong_swap_df = df.loc[df.class_swap == 'strong_swap']
+    strong_swap_df.reset_index(drop=True, inplace=True)
+    ss_features_start = np.stack(strong_swap_df.features_start.to_numpy())
+    ss_features_end = np.stack(strong_swap_df.features_end.to_numpy())
+
+    print(col.bold("\nFrequency of class-swapping: {:.2f}%".format(100 * (len(swap_df) / len(seeds)))))
+    print(col.bold("Frequency of strong class-swapping: {:.2f}%\n".format(100 * (len(strong_swap_df) / len(seeds)))))
+
+    # PCA and plots (scree plot, PC & class swap plots).
     pca = PCA(n_components=pca_dim)
     if pca_method == 'raw':
-        pca.fit(calculated_features)
-        features_to_reduce = map(lambda x: x[1] - x[0], batch(strong_class_swap_seeds, 2))
+        pca.fit(np.concatenate([features[0], features[1]]))
+        all_pc_diff = pca.transform(features[1]) - pca.transform(features[0])
     elif pca_method == 'delta':
-        pca.fit(class_swap_feature_differences)
-        features_to_reduce = class_swap_feature_differences
+        pca.fit(ss_features_end - ss_features_start)
+        all_pc_diff = pca.transform(np.array(features[1]) - np.array(features[0]))
+    for (xpc, ypc) in [[0, n] for n in range(1, pca_dim)]:
+        plt.clf()
+        sns.scatterplot(
+            x=all_pc_diff[:, xpc],
+            y=all_pc_diff[:, ypc],
+            hue=(np.array(predictions[1]) - np.array(predictions[0])),
+            s=10
+        )
+        ax = plt.gca()
+        ax.set_xlabel(f'PC{xpc}' if pca_method == 'delta' else f'Delta PC{xpc}')
+        ax.set_ylabel(f'PC{ypc}' if pca_method == 'delta' else f'Delta PC{ypc}')
+        plt.savefig(join(out, f'pca_scatter_{xpc}_{ypc}.svg'))
+
+    # Calculate PC differences.
+    if pca_method == 'raw':
+        strong_swap_df.loc[:, 'pc_diff'] = pd.Series(list(pca.transform(ss_features_end) - pca.transform(ss_features_start))).astype(object)
+    elif pca_method == 'delta':
+        strong_swap_df.loc[:, 'pc_diff'] = pd.Series(list(pca.transform(ss_features_end - ss_features_start))).astype(object)
 
     # Show some PC values for a handful of seeds.
     print("First 200 strong class-swap seeds:")
-    for i, (seed, feat_diff) in enumerate(zip(strong_class_swap_seeds, features_to_reduce)):
-        pca_transformed = pca.transform([feat_diff])
-        pc_vals = ', '.join([f'{p:.3f}' for p in pca_transformed[0]])
-        print("{}: {}".format(col.green(f"seed {seed}"), pc_vals))
+    for i, (_, row) in enumerate(strong_swap_df.iterrows()):
         if i > 200:
             break
+        pc_vals = ', '.join([f'{p:.3f}' for p in row.pc_diff])
+        print("{}: {}".format(col.green(f"seed {row.seed}"), pc_vals))
 
+    # Scree plot.
     pc_values = np.arange(pca.n_components_) + 1
-    if scree:
-        plt.plot(pc_values, pca.explained_variance_ratio_, 'ro-', linewidth=2)
-        plt.title('Scree Plot')
-        plt.show()
+    plt.plot(pc_values, pca.explained_variance_ratio_, 'ro-', linewidth=2)
+    plt.title('Scree Plot')
+    plt.savefig(join(out, f'{layer}_scree_{pca_method}.png'))
 
     # --- Correlate embedding dimensions with Principal Components (PC) -------
     ES = EmbeddingSearch(
@@ -770,56 +782,18 @@ def predict(
     ES.full_search(seed=pc_seed, batch_size=batch_size, pc=pc, plot=True)
     # -------------------------------------------------------------------------
 
-    # Generate UMAP.
-    umap = sf.stats.gen_umap(calculated_features, densmap=True, n_neighbors=30)
-
     # Export dataframe with seeds, features and class-swap summary.
-    if export:
-        calc_feat = [cf.astype(np.float32) for cf in calculated_features]
-        df = pd.DataFrame({
-            'seed': pd.Series(img_seeds),
-            'gan_embedding': pd.Series(used_embed),
-            'predictions': pd.Series(pred_labels).astype(np.float32),
-            'classifier_features': pd.Series(calc_feat).astype(object),
-            'class_swap': pd.Series(swap_labels),
-            'gan_labels': pd.Series(gan_labels),
-            'categorical_pred': pd.Series(plot_labels),
-            'linear_pred': pd.Series(pred_labels),
-            'umap_x': pd.Series(umap[:, 0]),
-            'umap_y': pd.Series(umap[:, 1])
-        })
-        df.to_parquet(f'{layer}_features.parquet.gzip', compression='gzip')
-        df_diff = pd.DataFrame({
-
-        })
-
-    # Feature maps.
-    sns.scatterplot(umap[:, 0], umap[:, 1], hue=gan_labels, s=7)
-    plt.savefig(join(out, f'{layer}_gan_labels.svg'))
-    plt.clf()
-    sns.scatterplot(umap[:, 0], umap[:, 1], hue=plot_labels, s=7)
-    plt.savefig(join(out, f'{layer}_class_preds.svg'))
-    plt.clf()
-    sns.scatterplot(umap[:, 0], umap[:, 1], hue=pred_labels, s=7)
-    plt.savefig(join(out, f'{layer}_linear_preds.svg'))
-    plt.clf()
-    sns.scatterplot(umap[:, 0], umap[:, 1], hue=swap_labels, s=7)
-    plt.savefig(join(out, f'{layer}_swap_labels.svg'))
-    plt.clf()
-
-    if lasso:
-        utils.lasso_plot(umap[:, 0], umap[:, 1], out_path='selected_points_from_predict.txt', s=7)
-        plt.show()
+    df.to_parquet(join(out, f'{layer}_features.parquet.gzip'), compression='gzip')
 
     # Write class-swap seeds.
     class_swap_path = join(out, 'class_swap_seeds.txt')
     with open(class_swap_path, 'w') as file:
-        file.write('\n'.join([str(s) for s in class_swap_seeds]))
+        file.write('\n'.join([str(s) for s in swap_df.seed]))
         print(f"Wrote class-swap seeds to {class_swap_path}")
 
     strong_class_swap_path = join(out, 'strong_class_swap_seeds.txt')
     with open(strong_class_swap_path, 'w') as file:
-        file.write('\n'.join([str(s) for s in strong_class_swap_seeds]))
+        file.write('\n'.join([str(s) for s in strong_swap_df.seed]))
         print(f"Wrote class-swap seeds to {strong_class_swap_path}")
 
 #----------------------------------------------------------------------------
