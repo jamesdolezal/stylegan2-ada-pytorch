@@ -1,6 +1,7 @@
 """Perform an embedding search."""
 
 import os
+import pickle
 import re
 from os.path import exists, join
 from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
@@ -25,8 +26,6 @@ from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 if TYPE_CHECKING:
     from slideflow.norm import StainNormalizer
-
-pd.set_option('mode.chained_assignment',None)
 
 #----------------------------------------------------------------------------
 
@@ -65,6 +64,43 @@ def noise_tensor(seed: int, z_dim: int) -> torch.Tensor:
         torch.Tensor: Noise vector of shape (1, z_dim)
     """
     return torch.from_numpy(np.random.RandomState(seed).randn(1, z_dim))
+
+
+def load_gan_and_embeddings(
+    gan_pkl: str,
+    start: int,
+    end: int,
+    device: torch.device
+) -> Tuple[torch.nn.Module, torch.Tensor, torch.Tensor]:
+    """Load a GAN network and create Tensor embeddings.
+
+    Args:
+        gan_pkl (str): Path to GAN network pkl.
+        start (int): Starting class index.
+        end (int): Ending class index.
+        device (torch.device): Device.
+
+    Returns:
+        torch.nn.Module: Embedding-interpolatable GAN module.
+
+        torch.Tensor: First class embedding.
+
+        torch.Tensor: Second class embedding.
+    """
+    print('Loading networks from "%s"...' % gan_pkl)
+    with dnnlib.util.open_url(gan_pkl) as f:
+        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+    G.mapping = EmbeddingMappingNetwork(G.mapping)
+    E_G = EmbeddingGenerator(G)
+    label_first = torch.zeros([1, G.c_dim], device=device)
+    label_first[:, start] = 1
+    label_second = torch.zeros([1, G.c_dim], device=device)
+    label_second[:, end] = 1
+    embedding_first = G.mapping.embed(label_first).cpu().numpy()
+    embedding_second = G.mapping.embed(label_second).cpu().numpy()
+    embed0 = torch.from_numpy(embedding_first).to(device)
+    embed1 = torch.from_numpy(embedding_second).to(device)
+    return E_G, embed0, embed1
 
 #----------------------------------------------------------------------------
 
@@ -269,7 +305,8 @@ class EmbeddingSearch:
         z: torch.Tensor,
         pc: int,
         starting_dims: Optional[Iterable[int]] = None,
-        batch_size: int = 1
+        batch_size: int = 1,
+        verbose: bool = True
     ):
         """For a given seed `z` and target Principal Component `pc`, find the
         embedding dimension that, when traversed, maximally changes the given
@@ -320,15 +357,18 @@ class EmbeddingSearch:
             self._create_mask(embed_idx, starting_mask=starting_mask)
             for embed_idx in dim_to_search
         ]
-        pb = tqdm(total=len(masks), leave=False, position=0)
+        if verbose:
+            pb = tqdm(total=len(masks), leave=False, position=1, ncols=80)
         for mask_batch in batch(masks, batch_size):
             pc_differences = self._compare_pc(
                 z=z.expand(len(mask_batch), -1),
                 embedding_mask=np.array(mask_batch)
             )
             pcs += [pc_differences]
-            pb.update(len(mask_batch))
-        pb.close()
+            if verbose:
+                pb.update(len(mask_batch))
+        if verbose:
+            pb.close()
 
         # Calculate the effect of each embedding dimension
         # on the change in a given principal component (PC) value.
@@ -380,7 +420,7 @@ class EmbeddingSearch:
 
         all_pc_change = []
         all_other_pc_change = []
-        for e in tqdm(order, leave=False):
+        for e in tqdm(order, leave=False, ncols=80):
             mask[e] = 0
             pc_differences = self._compare_pc(z, embedding_mask=mask)
 
@@ -407,7 +447,8 @@ class EmbeddingSearch:
         pc: int,
         depth: Optional[int] = None,
         batch_size: int = 1,
-        plot: bool = False
+        plot: bool = False,
+        verbose: bool = True,
     ) -> Tuple[List[int], List[float], List[float]]:
         """Perform a full embedding search.
 
@@ -439,27 +480,30 @@ class EmbeddingSearch:
         selected_dims = []
         all_pc_change = []
         all_other_pc_change = []
-        outer_pb = tqdm(total=depth, leave=False, position=1)
+        outer_pb = tqdm(total=depth, leave=False, position=0, ncols=80)
         for d in range(depth):
             dim, pc_change, other_pc_change = self._find_best_embedding_dim(
                 z,
                 pc=pc,
                 starting_dims=selected_dims,
-                batch_size=batch_size
+                batch_size=batch_size,
+                verbose=verbose,
             )
-            print("{}: Chose {}, {:.3f} percent PC {}, {:.3f} other PC".format(
-                col.blue(f'Depth {d}'),
-                dim,
-                pc_change,
-                pc,
-                other_pc_change
-            ))
+            if verbose:
+                tqdm.write("{}: Chose {}, {:.3f} percent PC {}, {:.3f} other PC".format(
+                    col.blue(f'Depth {d}'),
+                    dim,
+                    pc_change,
+                    pc,
+                    other_pc_change
+                ))
             selected_dims += [dim]
             all_pc_change += [pc_change]
             all_other_pc_change += [other_pc_change]
             outer_pb.update(1)
         outer_pb.close()
-        print("Order of embedding dimension selection:", selected_dims)
+        if verbose:
+            print("Order of embedding dimension selection:", selected_dims)
         if plot:
             self._plot_pc_change(
                 all_pc_change,
@@ -490,6 +534,7 @@ class EmbeddingSearch:
 @click.option('--batch-size', type=int, required=False, default=16, help='Batch size.')
 @click.option('--pca-method', type=str, required=False, default='delta', help='Order in which to perform PCA, either "delta" or "raw".')
 @click.option('--pca-dim', type=int, required=False, default=7, help='PCA dimensions.')
+@click.option('--search', type=bool, required=False, default=True, help='Perform embedding search.')
 def predict(
     ctx: click.Context,
     gan_pkl: str,
@@ -509,6 +554,7 @@ def predict(
     batch_size: int,
     pca_method: str,
     pca_dim: int,
+    search: bool,
 ):
     """Perform an embedding search.
 
@@ -597,6 +643,7 @@ def predict(
 
     print(f"Performing PCA reduction on {len(seeds)} seeds.")
     print(f"Using resize method '{resize_method}'.")
+    print(f"Saving results to {col.green(out)}")
 
     predictions = {0: [], 1: []}
     features = {0: [], 1: []}
@@ -607,26 +654,14 @@ def predict(
         noise_mode=noise_mode
     )
 
-    # Limit GPU memory for Tensorflow.
+    # Limit GPU memory for Tensorflow and get PyTorch GPU.
     gpus = tf.config.experimental.list_physical_devices('GPU')
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
+    device = torch.device('cuda')
 
     # Load GAN network and embeddings.
-    print('Loading networks from "%s"...' % gan_pkl)
-    device = torch.device('cuda')
-    with dnnlib.util.open_url(gan_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-    G.mapping = EmbeddingMappingNetwork(G.mapping)
-    E_G = EmbeddingGenerator(G)
-    label_first = torch.zeros([1, G.c_dim], device=device)
-    label_first[:, start] = 1
-    label_second = torch.zeros([1, G.c_dim], device=device)
-    label_second[:, end] = 1
-    embedding_first = G.mapping.embed(label_first).cpu().numpy()
-    embedding_second = G.mapping.embed(label_second).cpu().numpy()
-    embed0 = torch.from_numpy(embedding_first).to(device)
-    embed1 = torch.from_numpy(embedding_second).to(device)
+    E_G, embed0, embed1 = load_gan_and_embeddings(gan_pkl, start, end, device)
 
     # Load model configuration.
     print('Reading model configuration...')
@@ -656,7 +691,7 @@ def predict(
         img_batch = E_G(z, embed.expand(z.shape[0], -1), **gan_kwargs)
         img_batch = utils.process_gan_batch(img_batch, **process_kwargs)
         pred = model.predict(img_batch)[:, 0]
-        features_out = tf.reshape(classifier_features(img_batch), (z.shape[0], -1)).numpy()
+        features_out = tf.reshape(classifier_features(img_batch), (z.shape[0], -1)).numpy().astype(np.float32)
         return pred, features_out
 
     # -------------------------------------------------------------------------
@@ -717,21 +752,25 @@ def predict(
         'class_swap': pd.Series(swap_labels),
     })
     swap_df = df.loc[df.class_swap.isin(['strong_swap', 'weak_swap'])]
-    swap_df.reset_index(drop=True, inplace=True)
     strong_swap_df = df.loc[df.class_swap == 'strong_swap']
-    strong_swap_df.reset_index(drop=True, inplace=True)
-    ss_features_start = np.stack(strong_swap_df.features_start.to_numpy())
-    ss_features_end = np.stack(strong_swap_df.features_end.to_numpy())
 
-    print(col.bold("\nFrequency of class-swapping: {:.2f}%".format(100 * (len(swap_df) / len(seeds)))))
-    print(col.bold("Frequency of strong class-swapping: {:.2f}%\n".format(100 * (len(strong_swap_df) / len(seeds)))))
+    print(col.bold("\nFrequency of class-swapping: {:.2f}%".format(
+        100 * (len(swap_df) / len(seeds))
+    )))
+    print(col.bold("Frequency of strong class-swapping: {:.2f}%\n".format(
+        100 * (len(strong_swap_df) / len(seeds))
+    )))
 
     # PCA and plots (scree plot, PC & class swap plots).
     pca = PCA(n_components=pca_dim)
     if pca_method == 'raw':
+        # Fit to all features
         pca.fit(np.concatenate([features[0], features[1]]))
         all_pc_diff = pca.transform(features[1]) - pca.transform(features[0])
     elif pca_method == 'delta':
+        # Fit to strong-swap features only
+        ss_features_start = np.stack(strong_swap_df.features_start.to_numpy())
+        ss_features_end = np.stack(strong_swap_df.features_end.to_numpy())
         pca.fit(ss_features_end - ss_features_start)
         all_pc_diff = pca.transform(np.array(features[1]) - np.array(features[0]))
     for (xpc, ypc) in [[0, n] for n in range(1, pca_dim)]:
@@ -749,13 +788,18 @@ def predict(
 
     # Calculate PC differences.
     if pca_method == 'raw':
-        strong_swap_df.loc[:, 'pc_diff'] = pd.Series(list(pca.transform(ss_features_end) - pca.transform(ss_features_start))).astype(object)
+        df.loc[:, 'pc_start'] = pd.Series(list(pca.transform(np.stack(df.features_start.to_numpy())))).astype(object)
+        df.loc[:, 'pc_end'] = pd.Series(list(pca.transform(np.stack(df.features_end.to_numpy())))).astype(object)
+        df.loc[:, 'pc_diff'] = df.pc_end - df.pc_start
     elif pca_method == 'delta':
-        strong_swap_df.loc[:, 'pc_diff'] = pd.Series(list(pca.transform(ss_features_end - ss_features_start))).astype(object)
+        df.loc[:, 'pc_diff'] = pd.Series(list(pca.transform(
+            np.stack(df.features_end.to_numpy())
+            - np.stack(df.features_start.to_numpy())
+        ))).astype(object)
 
     # Show some PC values for a handful of seeds.
     print("First 200 strong class-swap seeds:")
-    for i, (_, row) in enumerate(strong_swap_df.iterrows()):
+    for i, (_, row) in enumerate(df.loc[df.class_swap == 'strong_swap'].iterrows()):
         if i > 200:
             break
         pc_vals = ', '.join([f'{p:.3f}' for p in row.pc_diff])
@@ -763,38 +807,48 @@ def predict(
 
     # Scree plot.
     pc_values = np.arange(pca.n_components_) + 1
+    plt.clf()
     plt.plot(pc_values, pca.explained_variance_ratio_, 'ro-', linewidth=2)
     plt.title('Scree Plot')
     plt.savefig(join(out, f'{layer}_scree_{pca_method}.png'))
 
-    # --- Correlate embedding dimensions with Principal Components (PC) -------
-    ES = EmbeddingSearch(
-        E_G,
-        classifier_features,
-        pca=pca,
-        pca_method=pca_method,
-        device=device,
-        embed_first=embed0,
-        embed_end=embed1,
-        gan_kwargs=gan_kwargs,
-        process_kwargs=process_kwargs
-    )
-    ES.full_search(seed=pc_seed, batch_size=batch_size, pc=pc, plot=True)
-    # -------------------------------------------------------------------------
+    if search:
+        # --- Correlate embedding dimensions with Principal Components (PC) -------
+        ES = EmbeddingSearch(
+            E_G,
+            classifier_features,
+            pca=pca,
+            pca_method=pca_method,
+            device=device,
+            embed_first=embed0,
+            embed_end=embed1,
+            gan_kwargs=gan_kwargs,
+            process_kwargs=process_kwargs
+        )
+        ES.full_search(seed=pc_seed, batch_size=batch_size, pc=pc, plot=True)
+        # -------------------------------------------------------------------------
+
+    # Export fit PCA.
+    pca_out = join(out, 'pca.pkl')
+    with open(pca_out, 'wb') as f:
+        pickle.dump(pca, f)
+    print(f"Wrote fit PCA to {col.green(pca_out)}")
 
     # Export dataframe with seeds, features and class-swap summary.
-    df.to_parquet(join(out, f'{layer}_features.parquet.gzip'), compression='gzip')
+    df_out = f'{layer}_features.parquet.gzip'
+    df.to_parquet(join(out, df_out), compression='gzip')
+    print(f"Wrote dataframe to {col.green(df_out)}")
 
     # Write class-swap seeds.
     class_swap_path = join(out, 'class_swap_seeds.txt')
     with open(class_swap_path, 'w') as file:
         file.write('\n'.join([str(s) for s in swap_df.seed]))
-        print(f"Wrote class-swap seeds to {class_swap_path}")
+        print(f"Wrote class-swap seeds to {col.green(class_swap_path)}")
 
     strong_class_swap_path = join(out, 'strong_class_swap_seeds.txt')
     with open(strong_class_swap_path, 'w') as file:
         file.write('\n'.join([str(s) for s in strong_swap_df.seed]))
-        print(f"Wrote class-swap seeds to {strong_class_swap_path}")
+        print(f"Wrote class-swap seeds to {col.green(strong_class_swap_path)}")
 
 #----------------------------------------------------------------------------
 

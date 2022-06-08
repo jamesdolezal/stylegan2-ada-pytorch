@@ -116,12 +116,14 @@ def vips_resize(img, crop_width, target_px):
 @tf.function
 def decode_batch(
     img,
-    normalizer: Optional["StainNormalizer"] = None
+    normalizer: Optional["StainNormalizer"] = None,
+    standardize: bool = True
 ) -> np.ndarray:
     if normalizer is not None:
         img = normalizer.batch_to_batch(img)[0]
-    tf_img = tf.image.per_image_standardization(img)
-    return {'tile_image': tf_img}
+    if standardize:
+        img = tf.image.per_image_standardization(img)
+    return {'tile_image': img}
 
 
 def process_gan_image(img: torch.Tensor, normalizer=None):
@@ -145,7 +147,7 @@ def process_gan_image(img: torch.Tensor, normalizer=None):
     return image
 
 
-def process_gan_batch(img: torch.Tensor, normalizer=None, resize_method='tf_aa'):
+def process_gan_batch(img: torch.Tensor, normalizer=None, resize_method='tf_aa', **kwargs):
 
     if (resize_method is not None
        and resize_method not in ('tf', 'tf_aa', 'torch', 'torch_aa', 'vips')):
@@ -183,6 +185,6 @@ def process_gan_batch(img: torch.Tensor, normalizer=None, resize_method='tf_aa')
         img = tf.image.resize(img, (target_px, target_px), method='lanczos3', antialias=(resize_method=='tf_aa'))
 
     # Normalize and standardize the image
-    image = decode_batch(img, normalizer=normalizer)
+    image = decode_batch(img, normalizer=normalizer, **kwargs)
 
     return image
