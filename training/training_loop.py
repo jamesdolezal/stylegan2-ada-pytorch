@@ -165,11 +165,13 @@ def training_loop(
         training_set_len = len(training_set)
     else:
         training_set_len = training_set.num_tiles
+
     if rank == 0:
         print()
         print('Num images: ', training_set_len)
         print('Image shape:', training_set.image_shape)
         print('Label shape:', training_set.label_shape)
+        print('Training set length:', training_set_len)
         print()
 
     # Construct networks.

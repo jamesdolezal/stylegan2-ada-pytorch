@@ -135,23 +135,20 @@ def setup_training_loop_kwargs(
         outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
         labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
 
-        # Added -----
-        import tensorflow as tf
+        if 'loc_labels' in args.slideflow_kwargs:
+            label_kwargs = dict(
+                class_name='slideflow.io.torch.LocLabelInterleaver',
+                loc_labels='labels.parquet.gzip',
+                labels=None,
+            )
+        else:
+            label_kwargs = dict(
+                class_name='slideflow.io.torch.InterleaveIterator',
+                labels=labels,
+            )
 
-        tf_gpus = tf.config.experimental.list_physical_devices('GPU')
-        for gpu in tf_gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-
-        model_path = '/mnt/data/projects/TCGA_THCA_BRAF/models/00158-brs-PNG-HP0/brs-PNG-HP0_epoch1/'
-        pca_pkl = '/mnt/data/projects/THYROID_GAN/embedding_search/postconv/delta/pca.pkl'
-        args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.PredictionInterleaver',
-                                                   classifier_path=model_path,
-                                                   classifier_layers='postconv',
-                                                   pca_pkl=pca_pkl,
-                                                   tfrecords=dataset.tfrecords(),
+        args.training_set_kwargs = dnnlib.EasyDict(tfrecords=dataset.tfrecords(),
                                                    img_size=args.slideflow_kwargs['tile_px'],
-                                                   img_um=args.slideflow_kwargs['tile_um'],
-                                                   labels=labels,
                                                    use_labels=cond,
                                                    chunk_size=4,
                                                    augment='xyr',
@@ -159,25 +156,10 @@ def setup_training_loop_kwargs(
                                                    num_tiles=dataset.num_tiles,
                                                    prob_weights=dataset.prob_weights,
                                                    model_type=args.slideflow_kwargs['model_type'],
-                                                   onehot=True)
+                                                   onehot=True,
+                                                   **label_kwargs)
 
-        # -----------
-
-        '''args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.InterleaveIterator',
-                                                   tfrecords=dataset.tfrecords(),
-                                                   img_size=args.slideflow_kwargs['tile_px'],
-                                                   labels=labels,
-                                                   use_labels=cond,
-                                                   chunk_size=4,
-                                                   augment='xyr',
-                                                   standardize=False,
-                                                   num_tiles=dataset.num_tiles,
-                                                   prob_weights=dataset.prob_weights,
-                                                   model_type=args.slideflow_kwargs['model_type'],
-                                                   onehot=True)'''
-    #num_workers = 3
-    num_workers = 0
-    args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=num_workers, prefetch_factor=2)
+    args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
         if slideflow is not None:
             args.training_set_kwargs.resolution = args.slideflow_kwargs.tile_px
