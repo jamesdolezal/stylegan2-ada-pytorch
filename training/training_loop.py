@@ -6,25 +6,24 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import os
-import time
 import copy
 import json
+import os
 import pickle
-import training
 import random
-import psutil
-import PIL.Image
-import numpy as np
-import torch
-import dnnlib
-from torch_utils import misc
-from torch_utils import training_stats
-from torch_utils.ops import conv2d_gradfix
-from torch_utils.ops import grid_sample_gradfix
+import time
 
+import dnnlib
 import legacy
+import numpy as np
+import PIL.Image
+import psutil
+import torch
 from metrics import metric_main
+from torch_utils import misc, training_stats
+from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
+
+import training
 
 # TODO: Fix seg fault in sample image generation
 
@@ -153,7 +152,7 @@ def training_loop(
     if rank == 0:
         print('Loading training set...')
 
-    if training_set_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+    if 'slideflow' in training_set_kwargs.class_name:
         training_set_kwargs['augment'] = 'xyr'
         training_set = dnnlib.util.construct_class_by_name(**{k: v for k, v in training_set_kwargs.items() if k not in ('resolution', 'xflip')})
         training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, **data_loader_kwargs))

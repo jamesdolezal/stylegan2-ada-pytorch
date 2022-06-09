@@ -6,15 +6,16 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import os
-import time
-import hashlib
-import pickle
 import copy
+import hashlib
+import os
+import pickle
+import time
 import uuid
+
+import dnnlib
 import numpy as np
 import torch
-import dnnlib
 from tqdm import tqdm
 
 #----------------------------------------------------------------------------
@@ -182,7 +183,7 @@ class ProgressMonitor:
 def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1,
                                       batch_size=64, data_loader_kwargs=None, max_items=None, **stats_kwargs):
     print("Computing feature stats for dataset...")
-    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+    if 'slideflow' in opts.dataset_kwargs.class_name:
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
         num_workers = 1
         slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
@@ -228,7 +229,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
 
     # Main loop.
-    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+    if 'slideflow' in opts.dataset_kwargs.class_name:
         item_subset = None
     else:
         item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
@@ -259,7 +260,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
 
     # Setup generator and load labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
-    if opts.dataset_kwargs.class_name == 'slideflow.io.torch.InterleaveIterator':
+    if 'slideflow' in opts.dataset_kwargs.class_name:
         slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs,
                                                       **slideflow_kwargs,
