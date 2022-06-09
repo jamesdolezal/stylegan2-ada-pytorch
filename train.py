@@ -9,21 +9,20 @@
 """Train a GAN using the techniques described in the paper
 "Training Generative Adversarial Networks with Limited Data"."""
 
-import os
-import click
-import re
-import json
-import tempfile
-import torch
-import dnnlib
 import copy
+import json
+import os
+import re
+import tempfile
 
-from training import training_loop
-from metrics import metric_main
-from torch_utils import training_stats
-from torch_utils import custom_ops
-
+import click
 import slideflow as sf
+import torch
+
+import dnnlib
+from metrics import metric_main
+from torch_utils import custom_ops, training_stats
+from training import training_loop
 
 #----------------------------------------------------------------------------
 
@@ -133,12 +132,8 @@ def setup_training_loop_kwargs(
         if args.slideflow_kwargs.model_type == 'linear':
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
-        if 'outcomes' in args.slideflow_kwargs:
-            labels, _ = dataset.labels(args.slideflow_kwargs['outcomes'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
-        else:
-            # Here for compatibility with old projects,
-            # which used "outcome_label_headers" instead of "outcomes"
-            labels, _ = dataset.labels(args.slideflow_kwargs['outcome_label_headers'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
+        labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
         args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.InterleaveIterator',
                                                    tfrecords=dataset.tfrecords(),
                                                    img_size=args.slideflow_kwargs['tile_px'],

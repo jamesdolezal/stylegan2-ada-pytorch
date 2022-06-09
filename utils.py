@@ -158,6 +158,7 @@ def decode_batch(
 ) -> np.ndarray:
     if resize_px is not None:
         img = tf.image.resize(img, (resize_px, resize_px), method=resize_method, antialias=resize_aa)
+        img = tf.cast(img, tf.uint8)
     if normalizer is not None:
         img = normalizer.batch_to_batch(img)[0]
     if standardize:
