@@ -3,8 +3,9 @@
 import os
 import pickle
 import re
+from functools import partial
 from os.path import exists, join
-from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Iterable, List, Optional, Tuple
 
 import click
 import matplotlib.pyplot as plt
@@ -17,7 +18,7 @@ import torch
 from sklearn.decomposition import PCA
 from slideflow.util import colors as col
 from slideflow.util import log
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 import dnnlib
 import legacy
@@ -104,7 +105,6 @@ def load_gan_and_embeddings(
 
 #----------------------------------------------------------------------------
 
-
 class EmbeddingSearch:
     def __init__(
         self,
@@ -114,9 +114,9 @@ class EmbeddingSearch:
         device: torch.device,
         embed_first: torch.Tensor,
         embed_end: torch.Tensor,
-        gan_kwargs: Optional[dict] = None,
-        process_kwargs: Optional[dict] = None,
+        normalizer: Optional[sf.norm.StainNormalizer] = None,
         pca_method: str = 'delta',
+        gan_kwargs: Optional[dict] = None,
     ) -> None:
         """Supervises an embedding search.
 
@@ -141,15 +141,15 @@ class EmbeddingSearch:
         if pca_method not in ('raw', 'delta'):
             raise ValueError("Invalid pca_method {pca_method}")
         self.E_G = E_G
-        self.device = device
         self.classifier_features = classifier_features
+        self.device = device
         self.pca = pca
         self.pca_method = pca_method
         self.embed0 = embed_first
         self.embed1 = embed_end
         self.e_dim = self.embed0.shape[1]
+        self.normalizer = normalizer
         self.gan_kwargs = gan_kwargs if gan_kwargs is not None else {}
-        self.process_kwargs = process_kwargs if process_kwargs is not None else {}
 
     @staticmethod
     def _best_dim_by_pc_change(
@@ -186,12 +186,7 @@ class EmbeddingSearch:
         ])
         return idx, pc_change, other_pc_change
 
-    @staticmethod
-    def _plot_pc_change(
-        pc_change: Iterable[float],
-        other_pc_change: Iterable[float],
-        title: Optional[str] = None
-    ) -> None:
+    def plot(self) -> None:
         """Plots Principal Component (PC) changes during the embedding search.
 
         Args:
@@ -201,80 +196,55 @@ class EmbeddingSearch:
                 all other PCs during the search as dimensions are added.
             title (str, optional): Title for plot. Defaults to None.
         """
-        x = range(len(pc_change))
-        if title is None:
-            title = 'Embedding Search Plot'
+        x = range(len(self.pc_change))
         plt.clf()
-        plt.title(title)
-        sns.lineplot(x=x, y=pc_change, color='r')
-        sns.lineplot(x=x, y=other_pc_change, color='b')
-        plt.axhline(y=1, color='black', linestyle='--')
-        plt.show()
+        sns.lineplot(x=x, y=self.pc_change, color='r', label='Target PC % Change')
+        sns.lineplot(x=x, y=self.other_pc_change, color='b', label='Other PC % Change')
+        sns.lineplot(x=x, y=self.preds, color='green', label='End prediction')
+        plt.axhline(y=0, color='black', linestyle='--')
+        plt.axhline(y=1, color='gray', linestyle='--')
+        plt.xlabel('Search depth (dimensions)')
 
     def _compare_pc(
         self,
-        z: torch.Tensor,
-        embedding_mask: Optional[np.ndarray] = None
+        features0: np.ndarray,
+        features1: np.ndarray,
     ) -> np.ndarray:
-        """For a given seed `z`, compare the dimensionality-reduced principal
-        components (PC) for the classifier feature space between classes,
-        where classifier features are generated for a given seed by passing
-        a GAN-generated image for a seed and class embedding (multiplied by a
-        mask) to the model classifier.
+
+        if self.pca_method == 'raw':
+            return self.pca.transform(features1) - self.pca.transform(features0)
+        elif self.pca_method == 'delta':
+            return self.pca.transform(features1 - features0)
+
+    def _features_from_embedding(
+        self,
+        z: torch.Tensor,
+        embedding: torch.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """From a given noise vector and embedding, calculate classifier
+        features and prediction.
 
         Args:
-            z (torch.Tensor): Seed. Either single or batch.
-            embedding_mask (np.ndarray, optional): Mask(s) to be applied to the
-                first embedding. Either single or batch. Inverse of the mask is
-                applied to the second embedding. Defaults to None
-                (full interpolation).
+            z (torch.Tensor): Noise vector (from seed).
+            embedding (torch.Tensor): Embedding vector.
 
         Returns:
-            np.ndarray: Differences in PC between classifiers,
-            with shape=(num_embedding_dimensions, num_principal_components)
+            tf.Tensor: Features vector.
+
+            tf.Tensor: Predictions vector.
         """
-        if embedding_mask is None:
-            embedding_mask = np.zeros(self.e_dim)
-        if not len(z.shape) == len(embedding_mask.shape):
-            raise ValueError('z and embedding_shape must have the same number '
-                             f'of dimensions (got {len(z.shape)} and '
-                             f'{len(embedding_mask.shape)})')
         if len(z.shape) == 1:
             z = torch.unsqueeze(z, axis=0)
-            embedding_mask = np.expand_dims(embedding_mask, axis=0)
+        if len(embedding.shape) == 1:
+            embedding = torch.unsqueeze(embedding, axis=0)
 
-        batch_size = z.shape[0]
-
-        # Create embedding masks.
-        inv_embedding_mask = (~embedding_mask.astype(bool)).astype(int)
-        mask = torch.from_numpy(embedding_mask).to(self.device)
-        inv_mask = torch.from_numpy(inv_embedding_mask).to(self.device)
-
-        # Create images from masked embeddings.
-        start_embed = self.embed0.expand(batch_size, -1)
-        end_embed = (((self.embed0.expand(batch_size, -1) * mask)
-                    + (self.embed1.expand(batch_size, -1) * inv_mask)))
-        img0 = self.E_G(z, start_embed, **self.gan_kwargs)
-        img1 = self.E_G(z, end_embed, **self.gan_kwargs)
-
-        # Process a batch of GAN images, applying crop/resizing operations
-        # and image normalization.
-        image0 = utils.process_gan_batch(img0, **self.process_kwargs)
-        image1 = utils.process_gan_batch(img1, **self.process_kwargs)
-
-        # Calculate features from generated images.
-        features0 = self.classifier_features(image0).numpy().reshape(batch_size, -1)
-        features1 = self.classifier_features(image1).numpy().reshape(batch_size, -1)
-
-        # Reduce features to principal components.
-        if self.pca_method == 'raw':
-            pc1 = self.pca.transform(features1)
-            pc0 = self.pca.transform(features0)
-            pc = pc1 - pc0
-        elif self.pca_method == 'delta':
-            pc = self.pca.transform(features1 - features0)
-
-        return pc
+        start_img_batch = self.E_G(z, embedding, **self.gan_kwargs)
+        start_img_batch = utils.process_gan_batch(start_img_batch)
+        start_img_batch = utils.decode_batch(start_img_batch, normalizer=self.normalizer, resize_px=299)
+        features0, pred0 = self.classifier_features(start_img_batch)
+        pred0 = pred0[:, 0].numpy()
+        features0 = features0.numpy()
+        return features0, pred0
 
     def _create_mask(
         self,
@@ -300,13 +270,43 @@ class EmbeddingSearch:
             mask *= starting_mask
         return mask
 
+    def _embedding_from_mask(self, mask_batch: np.ndarray) -> torch.Tensor:
+        mask = torch.from_numpy(mask_batch).to(self.device)
+        inv_mask_batch = (~mask_batch.astype(bool)).astype(int)
+        inv_mask = torch.from_numpy(inv_mask_batch).to(self.device)
+
+        # Create images from masked embeddings.
+        embed_batch = (((self.embed0.expand(len(mask_batch), -1) * mask)
+                        + (self.embed1.expand(len(mask_batch), -1) * inv_mask)))
+        return embed_batch
+
+    def _full_interpolation(self, z: torch.Tensor):
+
+        # Calculate features at the starting embedding.
+        features0, _ = self._features_from_embedding(z, self.embed0)
+        features1, _ = self._features_from_embedding(z, self.embed1)
+
+        # Calculate Principal Components (PC) from a full class interpolation
+        full_interp_pc = self._compare_pc(features0, features1)
+
+        if self.pca_method == 'delta':
+            # Calculate Principal Components (PC) from no interpolation
+            no_interp_pc = self.pca.transform([np.zeros(self.classifier_features.num_features)])
+
+            # Calculate difference in PCs with full interpolation
+            delta_pc_full = full_interp_pc - no_interp_pc
+        elif self.pca_method == 'raw':
+            no_interp_pc = 0
+            delta_pc_full = full_interp_pc
+
+        return features0, no_interp_pc, delta_pc_full
+
     def _find_best_embedding_dim(
         self,
         z: torch.Tensor,
         pc: int,
         starting_dims: Optional[Iterable[int]] = None,
         batch_size: int = 1,
-        verbose: bool = True
     ):
         """For a given seed `z` and target Principal Component `pc`, find the
         embedding dimension that, when traversed, maximally changes the given
@@ -335,55 +335,52 @@ class EmbeddingSearch:
         for d in starting_dims:
             starting_mask[d] = 0
 
-        # Calculate Principal Components (PC) from a full class interpolation
-        full_interp_pc = self._compare_pc(z)
+        # Full interpolation, for reference.
+        features0, no_interp_pc, delta_pc_full = self._full_interpolation(z)
 
-        if self.pca_method == 'delta':
-            # Calculate Principal Components (PC) from no interpolation
-            no_interp_pc = self.pca.transform([np.zeros(self.classifier_features.num_features)])
-
-            # Calculate difference in PCs with full interpolation
-            delta_pc_full = full_interp_pc - no_interp_pc
-        elif self.pca_method == 'raw':
-            no_interp_pc = np.zeros(full_interp_pc.shape[0])
-            delta_pc_full = full_interp_pc
-
+        # Prepare masks.
         pcs = []
-        dim_to_search = [
-            d for d in list(range(self.e_dim))
-            if d not in starting_dims
-        ]
-        masks = [
-            self._create_mask(embed_idx, starting_mask=starting_mask)
-            for embed_idx in dim_to_search
-        ]
-        if verbose:
-            pb = tqdm(total=len(masks), leave=False, position=1, ncols=80)
-        for mask_batch in batch(masks, batch_size):
-            pc_differences = self._compare_pc(
-                z=z.expand(len(mask_batch), -1),
-                embedding_mask=np.array(mask_batch)
-            )
+        preds = []
+        dim_to_search = [d for d in list(range(self.e_dim)) if d not in starting_dims]
+        masks = [self._create_mask(e, starting_mask=starting_mask) for e in dim_to_search]
+
+        # GAN generator.
+        def gan_generator():
+            for mask_batch in batch(masks, batch_size):
+                embed_batch = self._embedding_from_mask(np.stack(mask_batch))
+                img_batch = self.E_G(z.expand(len(mask_batch), -1), embed_batch, **self.gan_kwargs)
+                yield utils.process_gan_batch(img_batch)
+
+        # Input data stream.
+        gan_end_dts = utils.build_gan_dataset(gan_generator, 299, normalizer=self.normalizer)
+
+        # Calculate differences while interpolating across each dimension.
+        pb = tqdm(total=len(masks), leave=False, position=1, desc="Inner search")
+        for img_batch in gan_end_dts:
+            features_, pred_ = self.classifier_features(img_batch)
+            pred_ = pred_[:, 0].numpy()
+            features_ = tf.reshape(features_, (features_.shape[0], -1)).numpy()
+            pc_differences = self._compare_pc(features0, features_)
             pcs += [pc_differences]
-            if verbose:
-                pb.update(len(mask_batch))
-        if verbose:
-            pb.close()
+            preds += [pred_]
+            pb.update(features_.shape[0])
+        pb.close()
 
         # Calculate the effect of each embedding dimension
         # on the change in a given principal component (PC) value.
+        preds = np.concatenate(preds)
         pc_by_embedding = np.concatenate(pcs)
         pc_proportion_by_embedding = (pc_by_embedding - no_interp_pc) / delta_pc_full
         dim_idx, pc_change, other_pc_change = self._best_dim_by_pc_change(pc_proportion_by_embedding, pc=pc)
         dim = dim_to_search[dim_idx]
-        return dim, pc_change, other_pc_change
+        return dim, pc_change, other_pc_change, preds[dim_idx]
 
     def ordered_search(
         self,
         seed: int,
         order: Iterable[int],
         pc: int = 0,
-        plot: bool = False
+        batch_size: int = 1,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Perform an embedding search by progressively interpolating each
         specified embedding dimension specified in `order`.
@@ -407,39 +404,46 @@ class EmbeddingSearch:
         """
         print("Performing ordered search.")
         z = noise_tensor(seed, self.E_G.z_dim)[0].to(self.device)
-        mask = np.ones(self.e_dim)
 
-        # Calculate Principal Components (PC) from a full class interpolation
-        full_interp_pc = self._compare_pc(z)
+        # Full interpolation, for reference.
+        features0, no_interp_pc, delta_pc_full = self._full_interpolation(z)
 
-        # Calculate Principal Components (PC) from no interpolation
-        no_interp_pc = self.pca.transform([np.zeros(self.classifier_features.num_features)])
+        self.pc_change = []
+        self.other_pc_change = []
+        self.preds = []
 
-        # Calculate difference in PCs with full interpolation
-        delta_pc_full = full_interp_pc - no_interp_pc
+        # Create embedding masks.
+        masks = [self._create_mask(e) for e in order]
 
-        all_pc_change = []
-        all_other_pc_change = []
-        for e in tqdm(order, leave=False, ncols=80):
-            mask[e] = 0
-            pc_differences = self._compare_pc(z, embedding_mask=mask)
+        # GAN generator.
+        def gan_generator():
+            for mask_batch in batch(masks, batch_size):
+                embed_batch = self._embedding_from_mask(np.stack(mask_batch))
+                img_batch = self.E_G(z.expand(len(mask_batch), -1), embed_batch, **self.gan_kwargs)
+                yield utils.process_gan_batch(img_batch)
+
+        # Input data stream.
+        gan_end_dts = utils.build_gan_dataset(gan_generator, 299, normalizer=self.normalizer)
+
+        pb = tqdm(total = len(masks), leave=False)
+        for img_batch in gan_end_dts:
+            features_, pred_ = self.classifier_features(img_batch)
+            pred_ = pred_[:, 0].numpy()
+            features_ = tf.reshape(features_, (features_.shape[0], -1)).numpy()
+            pc_differences = self._compare_pc(features0, features_)
 
             # Calculate the effect of each embedding dimension
             # on the change in a given principal component (PC) value.
             pc_proportions = (pc_differences - no_interp_pc) / delta_pc_full
-            _, pc_change, other_pc_change = self._best_dim_by_pc_change(pc_proportions, pc=pc)
-            all_pc_change += [pc_change]
-            all_other_pc_change += [other_pc_change]
+            _, _pc_change, _other_pc_change = self._best_dim_by_pc_change(pc_proportions, pc=pc)
+            self.pc_change += [_pc_change]
+            self.other_pc_change += [_other_pc_change]
+            self.preds += [pred_]
+            pb.update(features_.shape[0])
 
-        all_pc_change = np.array(all_pc_change)
-        all_other_pc_change = np.array(all_other_pc_change)
-        if plot:
-            self._plot_pc_change(
-                all_pc_change,
-                all_other_pc_change,
-                title=f'Embedding Search Plot (PC={pc}, seed={seed})'
-            )
-        return all_pc_change, all_other_pc_change
+        self.pc_change = np.array(self.pc_change)
+        self.other_pc_change = np.array(self.other_pc_change)
+        self.preds = np.concatenate(self.preds)
 
     def full_search(
         self,
@@ -447,7 +451,6 @@ class EmbeddingSearch:
         pc: int,
         depth: Optional[int] = None,
         batch_size: int = 1,
-        plot: bool = False,
         verbose: bool = True,
     ) -> Tuple[List[int], List[float], List[float]]:
         """Perform a full embedding search.
@@ -477,41 +480,32 @@ class EmbeddingSearch:
         print(col.bold(f"\nPerforming search for PC={pc} on seed={seed} with depth={depth}"))
 
         z = noise_tensor(seed, z_dim=self.E_G.z_dim)[0].to(self.device)
-        selected_dims = []
-        all_pc_change = []
-        all_other_pc_change = []
-        outer_pb = tqdm(total=depth, leave=False, position=0, ncols=80)
+        self.selected_dims = []
+        self.pc_change = []
+        self.other_pc_change = []
+        self.preds = []
+        outer_pb = tqdm(total=depth, leave=False, position=0, desc="Outer search")
         for d in range(depth):
-            dim, pc_change, other_pc_change = self._find_best_embedding_dim(
+            dim, _pc_change, _other_pc_change, _preds = self._find_best_embedding_dim(
                 z,
                 pc=pc,
-                starting_dims=selected_dims,
+                starting_dims=self.selected_dims,
                 batch_size=batch_size,
-                verbose=verbose,
             )
             if verbose:
                 tqdm.write("{}: Chose {}, {:.3f} percent PC {}, {:.3f} other PC".format(
                     col.blue(f'Depth {d}'),
                     dim,
-                    pc_change,
+                    _pc_change,
                     pc,
-                    other_pc_change
+                    _other_pc_change
                 ))
-            selected_dims += [dim]
-            all_pc_change += [pc_change]
-            all_other_pc_change += [other_pc_change]
+            self.selected_dims += [dim]
+            self.pc_change += [_pc_change]
+            self.other_pc_change += [_other_pc_change]
+            self.preds += [_preds]
             outer_pb.update(1)
         outer_pb.close()
-        if verbose:
-            print("Order of embedding dimension selection:", selected_dims)
-        if plot:
-            self._plot_pc_change(
-                all_pc_change,
-                all_other_pc_change,
-                title=f'Embedding Search Plot (PC={pc}, seed={seed})'
-            )
-        return selected_dims, all_pc_change, all_other_pc_change
-
 
 #----------------------------------------------------------------------------
 
@@ -643,7 +637,7 @@ def predict(
 
     print(f"Performing PCA reduction on {len(seeds)} seeds.")
     print(f"Using resize method '{resize_method}'.")
-    print(f"Saving results to {col.green(out)}")
+    print(f"Results will be saved to {col.green(out)}")
 
     predictions = {0: [], 1: []}
     features = {0: [], 1: []}
@@ -675,35 +669,37 @@ def predict(
             normalizer.fit(**config['norm_fit'])
     else:
         normalizer = None
-    process_kwargs = dict(
-        normalizer=normalizer,
-        resize_method=resize_method
-    )
 
     # Load classifier model and feature extractor.
     print('Loading classifier from "%s"...' % classifier_path)
     model = tf.keras.models.load_model(classifier_path)
-    classifier_features = sf.model.Features.from_model(model, layers=layer)
+    classifier_features = sf.model.Features.from_model(model, layers=layer, include_logits=True)
 
     # --- GAN-Classifier pipeline ---------------------------------------------
+    def gan_generator(embedding):
+        def generator():
+            for seed_batch in batch(seeds, batch_size):
+                z = torch.stack([noise_tensor(s, z_dim=E_G.z_dim)[0] for s in seed_batch]).to(device)
+                img_batch = E_G(z, embedding.expand(z.shape[0], -1), **gan_kwargs)
+                yield utils.process_gan_batch(img_batch)
+        return generator
 
-    def features_from_gan(z, embed):
-        img_batch = E_G(z, embed.expand(z.shape[0], -1), **gan_kwargs)
-        img_batch = utils.process_gan_batch(img_batch, **process_kwargs)
-        pred = model.predict(img_batch)[:, 0]
-        features_out = tf.reshape(classifier_features(img_batch), (z.shape[0], -1)).numpy().astype(np.float32)
-        return pred, features_out
-
-    # -------------------------------------------------------------------------
+    # --- Input data stream ---------------------------------------------------
+    gan_embed0_dts = utils.build_gan_dataset(gan_generator(embed0), 299, normalizer=normalizer)
+    gan_embed1_dts = utils.build_gan_dataset(gan_generator(embed1), 299, normalizer=normalizer)
 
     # Calculate classifier features for GAN images created from seeds.
     # Calculation happens in batches to improve computational efficiency.
+    # noise + embedding -> GAN -> Classifier -> Predictions, Features
     pb = tqdm(total=len(seeds), leave=False)
-    for seed_batch in batch(seeds, batch_size):
-        # noise + embedding -> GAN -> Classifier -> Predictions, Features
-        z = torch.stack([noise_tensor(s, z_dim=E_G.z_dim)[0] for s in seed_batch]).to(device)
-        pred0, features0 = features_from_gan(z, embed0)
-        pred1, features1 = features_from_gan(z, embed1)
+    for (seed_batch, embed0_batch, embed1_batch) in zip(batch(seeds, batch_size), gan_embed0_dts, gan_embed1_dts):
+
+        features0, pred0 = classifier_features(embed0_batch)
+        features1, pred1 = classifier_features(embed1_batch)
+        pred0 = pred0[:, 0].numpy()
+        pred1 = pred1[:, 0].numpy()
+        features0 = tf.reshape(features0, (len(seed_batch), -1)).numpy().astype(np.float32)
+        features1 = tf.reshape(features1, (len(seed_batch), -1)).numpy().astype(np.float32)
 
         # For each seed in the batch, determine if there ids "class-swapping",
         # where the GAN class label matches the classifier prediction.
@@ -823,9 +819,9 @@ def predict(
             embed_first=embed0,
             embed_end=embed1,
             gan_kwargs=gan_kwargs,
-            process_kwargs=process_kwargs
+            normalizer=normalizer
         )
-        ES.full_search(seed=pc_seed, batch_size=batch_size, pc=pc, plot=True)
+        ES.full_search(seed=pc_seed, batch_size=batch_size, pc=pc)
         # -------------------------------------------------------------------------
 
     # Export fit PCA.

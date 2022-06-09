@@ -22,6 +22,7 @@ from scipy.interpolate import interp1d
 
 import dnnlib
 import legacy
+import utils
 from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 #----------------------------------------------------------------------------
@@ -176,11 +177,11 @@ def interpolate(
         # Create the embedding mask
         if isinstance(embedding_dims, list):
             print(f"Interpolating only across {len(embedding_dims)} supplied dimensions.")
-            mask = np.ones(embedding_first.shape[1])
-            for e in embedding_dims:
-                mask[e] = 0
-            inv_mask = (~mask.astype(bool)).astype(int)
-            embedding_second = embedding_first * mask + embedding_second * inv_mask
+            embedding_second = utils.masked_embedding(
+                embedding_dims,
+                embedding_first,
+                embedding_second
+            )
 
         interpolated_embedding = interp1d([0, steps-1], np.vstack([embedding_first, embedding_second]), axis=0)
         G.mapping = EmbeddingMappingNetwork(G.mapping)

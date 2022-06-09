@@ -1,5 +1,5 @@
 from functools import partial
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -71,6 +71,15 @@ class SelectFromCollection:
         self.canvas.draw_idle()
 
 
+def masked_embedding(embedding_dims, embed_first, embed_second):
+    mask = np.ones(embed_first.shape[1])
+    for e in embedding_dims:
+        mask[e] = 0
+    inv_mask = (~mask.astype(bool)).astype(int)
+    embed_second = embed_first * mask + embed_second * inv_mask
+    return embed_second
+
+
 def lasso_plot(x, y, out_path=None, **kwargs):
     # Create plot.
     fig, ax = plt.subplots()
@@ -113,12 +122,42 @@ def vips_resize(img, crop_width, target_px):
     return img
 
 
+def build_gan_dataset(
+    generator: Callable,
+    target_px: int,
+    normalizer: Optional[sf.norm.StainNormalizer] = None
+) -> tf.data.Dataset:
+    """Builds a processed GAN image dataset from a generator.
+
+    Args:
+        generator (Callable): GAN generator which yields a GAN image batch.
+        normalizer (Optional[sf.norm.StainNormalizer], optional): Stain
+            normalizer. Defaults to None.
+
+    Returns:
+        tf.data.Dataset: Processed dataset.
+    """
+    sig = tf.TensorSpec(shape=(None, None, None, 3), dtype=tf.uint8)
+    dts = tf.data.Dataset.from_generator(generator, output_signature=sig)
+    dts = dts.map(
+        partial(decode_batch, normalizer=normalizer, resize_px=target_px),
+        num_parallel_calls=tf.data.AUTOTUNE,
+        deterministic=True
+    )
+    return dts
+
+
 @tf.function
 def decode_batch(
     img,
     normalizer: Optional["StainNormalizer"] = None,
-    standardize: bool = True
+    standardize: bool = True,
+    resize_px: Optional[int] = None,
+    resize_method: str = 'lanczos3',
+    resize_aa: bool = True,
 ) -> np.ndarray:
+    if resize_px is not None:
+        img = tf.image.resize(img, (resize_px, resize_px), method=resize_method, antialias=resize_aa)
     if normalizer is not None:
         img = normalizer.batch_to_batch(img)[0]
     if standardize:
@@ -147,10 +186,10 @@ def process_gan_image(img: torch.Tensor, normalizer=None):
     return image
 
 
-def process_gan_batch(img: torch.Tensor, normalizer=None, resize_method='tf_aa', **kwargs):
+def process_gan_batch(img: torch.Tensor, resize_method=None) -> tf.Tensor:
 
     if (resize_method is not None
-       and resize_method not in ('tf', 'tf_aa', 'torch', 'torch_aa', 'vips')):
+       and resize_method not in ('torch', 'torch_aa', 'vips')):
         raise ValueError(f'Invalid resize method {resize_method}')
 
     # Calculate parameters for resize/crop.
@@ -180,11 +219,4 @@ def process_gan_batch(img: torch.Tensor, normalizer=None, resize_method='tf_aa',
     # Convert to Tensorflow tensor
     img = tf.convert_to_tensor(img)
 
-    # Resize with Tensorflow
-    if resize_method in ('tf', 'tf_aa'):
-        img = tf.image.resize(img, (target_px, target_px), method='lanczos3', antialias=(resize_method=='tf_aa'))
-
-    # Normalize and standardize the image
-    image = decode_batch(img, normalizer=normalizer, **kwargs)
-
-    return image
+    return img
