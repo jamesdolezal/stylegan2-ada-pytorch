@@ -1,4 +1,6 @@
-## StyleGAN2-ADA &mdash; Official PyTorch implementation
+## StyleGAN2-ADA &mdash; Modified for Slideflow
+
+**Note: requires PyTorch <= 1.9**
 
 ![Teaser image](./docs/stylegan2-ada-teaser-1024x252.png)
 
