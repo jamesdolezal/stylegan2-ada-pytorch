@@ -138,7 +138,7 @@ def setup_training_loop_kwargs(
         if 'loc_labels' in args.slideflow_kwargs:
             label_kwargs = dict(
                 class_name='slideflow.io.torch.LocLabelInterleaver',
-                loc_labels='labels.parquet.gzip',
+                loc_labels=args.slideflow_kwargs['loc_labels'],
                 labels=None,
             )
         else:
