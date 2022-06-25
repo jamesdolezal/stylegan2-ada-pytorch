@@ -11,7 +11,7 @@
 import os
 import re
 from os.path import join
-from typing import List, Optional
+from typing import Any, Iterable, List, Optional
 
 import click
 import imageio
@@ -40,6 +40,99 @@ def num_range(s: str) -> List[int]:
         vals = s.split(',')
         return [int(x) for x in vals]
 
+
+def save_video(
+    imgs: Iterable[np.ndarray],
+    path: str,
+    fps: int = 30,
+    codec:str = 'libx264',
+    bitrate: str = '16M',
+    macro_block_size: int = 1
+) -> None:
+    # Padd the image if the width/height is odd
+    if imgs[0].shape[0] % 2:
+        imgs = [np.pad(img, ((1, 0), (1, 0), (0, 0))) for img in imgs]
+    video_file = imageio.get_writer(
+        path,
+        mode='I',
+        fps=fps,
+        codec=codec,
+        bitrate=bitrate,
+        macro_block_size=macro_block_size
+    )
+    for img in imgs:
+        video_file.append_data(img)
+    video_file.close()
+
+
+def save_merged(imgs: Iterable[np.ndarray], path: str, steps: Optional[int] = None):
+    if steps is None:
+        steps = len(imgs)
+    out_img = Image.new('RGB', (299*steps, 299))
+    x_offset = 0
+    for img in imgs:
+        out_img.paste(Image.fromarray(img), (x_offset, 0))
+        x_offset += 299
+    out_img.save(path)
+
+
+def load_gan(
+    network_pkl: str,
+    device: Optional[torch.device] = None
+) -> torch.nn.Module:
+    with dnnlib.util.open_url(network_pkl) as f:
+        G = legacy.load_network_pkl(f)['G_ema']
+    if device is not None:
+        G = G.to(device)
+    return G
+
+
+def class_interpolate(
+    G: torch.nn.Module,
+    z: torch.tensor,
+    start: int,
+    end: int,
+    device: torch.device,
+    steps: int = 100,
+    **gan_kwargs: Any
+):
+    if start >= G.c_dim:
+        raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
+    if end >= G.c_dim:
+        raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
+    label_first = torch.zeros([1, G.c_dim], device=device)
+    label_first[:, start] = 1
+    label_second = torch.zeros([1, G.c_dim], device=device)
+    label_second[:, end] = 1
+    embedding_first = G.mapping.embed(label_first).cpu().numpy()
+    embedding_second = G.mapping.embed(label_second).cpu().numpy()
+    interpolated_embedding = interp1d([0, steps-1], np.vstack([embedding_first, embedding_second]), axis=0)
+    G.mapping = EmbeddingMappingNetwork(G.mapping)
+    E_G = EmbeddingGenerator(G)
+
+    # Generate interpolated images.
+    for interp_idx in range(steps):
+        embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
+        img = E_G(z, embed, **gan_kwargs)
+        img = (img + 1) * (255/2)
+        img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
+        yield img
+
+
+def linear_interpolate(
+    G: torch.nn.Module,
+    z: torch.tensor,
+    device: torch.device,
+    steps: int = 100,
+    **gan_kwargs: Any
+):
+    for interp_idx in range(steps):
+        torch_interp = torch.tensor([[interp_idx/steps]]).to(device)
+        img = G(z, torch_interp, **gan_kwargs)
+        img = (img + 1) * (255/2)
+        img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
+        yield img
+
 #----------------------------------------------------------------------------
 
 @click.command()
@@ -55,7 +148,7 @@ def num_range(s: str) -> List[int]:
 @click.option('--video', help='Save in video (MP4) format. If false, will save side-by-side images.', default=True, show_default=True, type=bool, metavar='BOOL')
 @click.option('--steps', help='Number of interpolation steps.', type=int, default=100, show_default=True)
 @click.option('--merge', help='Merge images side-by-side.', type=bool, default=False, show_default=True)
-def interpolate(
+def save_interpolation(
     ctx: click.Context,
     network_pkl: str,
     seeds: Optional[List[int]],
@@ -99,62 +192,37 @@ def interpolate(
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-
+    G = load_gan(network_pkl, device=device)
+    gan_kw = dict(truncation_psi=truncation_psi, noise_mode=noise_mode)
     os.makedirs(outdir, exist_ok=True)
-
-    if not linear:
-        if start >= G.c_dim:
-            raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
-        if end >= G.c_dim:
-            raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
-        label_first = torch.zeros([1, G.c_dim], device=device)
-        label_first[:, start] = 1
-        label_second = torch.zeros([1, G.c_dim], device=device)
-        label_second[:, end] = 1
-        embedding_first = G.mapping.embed(label_first).cpu().numpy()
-        embedding_second = G.mapping.embed(label_second).cpu().numpy()
-        interpolated_embedding = interp1d([0, steps-1], np.vstack([embedding_first, embedding_second]), axis=0)
-        G.mapping = EmbeddingMappingNetwork(G.mapping)
-        E_G = EmbeddingGenerator(G)
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+
+        # Set up interpolation generator
+        if linear:
+            generator = class_interpolate(G, z, device, steps, **gan_kw)
+        else:
+            generator = class_interpolate(G, z, start, end, device, steps, **gan_kw)
+
+        # Process interpolated images
         if video:
             video_path = join(outdir, f'seed{seed:04d}.mp4')
-            video_file = imageio.get_writer(video_path, mode='I', fps=30, codec='libx264', bitrate='16M')
-            print (f'Saving optimization progress video "{video_path}"')
+            print(f'Saving optimization progress video "{video_path}"')
+            save_video(generator, path=video_path)
         elif merge:
-            out_img = Image.new('RGB', (299*steps, 299))
-            x_offset = 0
-
-        for interp_idx in range(steps):
-            if linear:
-                torch_interp = torch.tensor([[interp_idx/steps]]).to(device)
-                img = G(z, torch_interp, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            else:
-                embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
-                img = E_G(z, embed, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            img = (img + 1) * (255/2)
-            img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-            if video:
-                video_file.append_data(img)
-            elif merge:
-                out_img.paste(Image.fromarray(img), (x_offset, 0))
-                x_offset += 299
-            else:
+            out_path = join(outdir, f'seed{seed:04d}.png')
+            print(f'Saving merged picture "{video_path}"')
+            save_merged(generator, path=out_path, steps=steps)
+        else:
+            for interp_idx, img in enumerate(generator):
                 Image.fromarray(img).save(join(outdir, f'seed{seed:04d}-{interp_idx:03d}.png'))
 
-        if video:
-            video_file.close()
-        elif merge:
-            out_img.save(join(outdir, f'seed{seed:04d}.png'))
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    interpolate() # pylint: disable=no-value-for-parameter
+    save_interpolation() # pylint: disable=no-value-for-parameter
 
 #----------------------------------------------------------------------------
