@@ -1,5 +1,5 @@
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Iterable, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,7 +9,6 @@ import tensorflow as tf
 import torch
 from matplotlib.path import Path
 from matplotlib.widgets import LassoSelector
-from PIL import Image
 from torchvision import transforms
 
 if TYPE_CHECKING:
@@ -69,6 +68,26 @@ class SelectFromCollection:
         self.fc[:, -1] = 1
         self.collection.set_facecolors(self.fc)
         self.canvas.draw_idle()
+
+
+def batch(iterable: Iterable, n: int = 1) -> Iterable:
+    """Separates an interable into batches of maximum size `n`."""
+    l = len(iterable)
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+
+
+def noise_tensor(seed: int, z_dim: int) -> torch.Tensor:
+    """Creates a noise tensor based on a given seed and dimension size.
+
+    Args:
+        seed (int): Seed.
+        z_dim (int): Dimension of noise vector to create.
+
+    Returns:
+        torch.Tensor: Noise vector of shape (1, z_dim)
+    """
+    return torch.from_numpy(np.random.RandomState(seed).randn(1, z_dim))
 
 
 def masked_embedding(embedding_dims, embed_first, embed_second):
@@ -166,38 +185,20 @@ def decode_batch(
     return {'tile_image': img}
 
 
-def process_gan_image(img: torch.Tensor, normalizer=None):
-    img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-    img = Image.fromarray(img[0].cpu().numpy(), 'RGB')
-
-    # Resize/crop.
-    gan_um = 400
-    gan_px = 512
-    target_um = 302
-    target_px = 299
-    crop_factor = target_um / gan_um
-    crop_width = int(crop_factor * gan_px)
-    left = gan_px/2 - crop_width/2
-    upper = gan_px/2 - crop_width/2
-    right = left + crop_width
-    lower = upper + crop_width
-    img = img.crop((left, upper, right, lower))
-    img = img.resize((target_px, target_px))
-    image = decode_img(img, normalizer=normalizer)
-    return image
-
-
-def process_gan_batch(img: torch.Tensor, resize_method=None) -> tf.Tensor:
+def process_gan_batch(
+    img: torch.Tensor,
+    resize_method=None,
+    gan_um: int = 400,
+    gan_px: int = 512,
+    target_um: int = 302,
+    target_px: int = 299
+) -> tf.Tensor:
 
     if (resize_method is not None
        and resize_method not in ('torch', 'torch_aa', 'vips')):
         raise ValueError(f'Invalid resize method {resize_method}')
 
     # Calculate parameters for resize/crop.
-    gan_um = 400
-    gan_px = 512
-    target_um = 302
-    target_px = 299
     crop_factor = target_um / gan_um
     crop_width = int(crop_factor * gan_px)
     left = int(gan_px/2 - crop_width/2)
@@ -221,3 +222,26 @@ def process_gan_batch(img: torch.Tensor, resize_method=None) -> tf.Tensor:
     img = tf.convert_to_tensor(img)
 
     return img
+
+
+def process_gan_raw(img, normalizer=None, **kwargs):
+    """Process raw GAN output, returning a
+    non-normalized image Tensor (for viewing)
+    and a normalized image Tensor (for inference)
+    """
+    img = process_gan_batch(img)
+    img = decode_batch(img, **kwargs)['tile_image']
+    if normalizer is not None:
+        img = normalizer.batch_to_batch(img)[0]
+    processed_img = tf.image.per_image_standardization(img)
+    return img, processed_img
+
+
+def process_gan_uint8(img):
+    """Process a GAN uint8 image, returning a
+    non-normalized image Tensor (for viewing)
+    and a normalized image Tensor (for inference)
+    """
+    img = torch.from_numpy(np.expand_dims(img, axis=0)).permute(0, 3, 1, 2)
+    img = (img / 127.5) - 1
+    return process_gan_raw(img)
