@@ -22,7 +22,8 @@ from tqdm import tqdm
 
 import dnnlib
 import legacy
-from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
+
+from . import embedding
 
 #----------------------------------------------------------------------------
 
@@ -39,6 +40,10 @@ from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--gan_um', help='Tile size in microns of GAN images', type=int, default=400)
+@click.option('--gan_px', help='Tile size in pixels of GAN images', type=int, default=400)
+@click.option('--target_um', help='Tile size in microns of target images', type=int, default=400)
+@click.option('--target_px', help='Tile size in pixels of target images', type=int, default=400)
 def generate_images(
     ctx: click.Context,
     network_pkl: str,
@@ -52,6 +57,10 @@ def generate_images(
     noise_mode: str,
     outdir: str,
     class_idx: Optional[int],
+    gan_um: int,
+    gan_px: int,
+    target_um: int,
+    target_px: int
 ):
     """Generate images using pretrained network pickle.
 
@@ -80,10 +89,20 @@ def generate_images(
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     os.makedirs(outdir, exist_ok=True)
+
+    if embed:
+        print("Generating images using middle embedding...")
+        G, E_G = embedding.load_embedding_gan(network_pkl, device=device)
+        embed0, embed1 = embedding.get_class_embeddings(G, start=0, end=1, device=device)
+        embedding_first = embed0.cpu().numpy()
+        embedding_second = embed1.cpu().numpy()
+        interpolated_embedding = interp1d([0,2], np.vstack([embedding_first, embedding_second]), axis=0)
+        m_embed = torch.from_numpy(np.expand_dims(interpolated_embedding(1), axis=0)).to(device)
+    else:
+        with dnnlib.util.open_url(network_pkl) as f:
+            G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     # Labels.
     label = torch.zeros([1, G.c_dim], device=device)
@@ -95,19 +114,6 @@ def generate_images(
     else:
         if class_idx is not None:
             print ('warn: --class=lbl ignored when running on an unconditional network')
-
-    if embed:
-        print("Generating images using middle embedding...")
-        label_first = torch.zeros([1, G.c_dim], device=device)
-        label_first[:, 0] = 1
-        label_second = torch.zeros([1, G.c_dim], device=device)
-        label_second[:, 1] = 1
-        embedding_first = G.mapping.embed(label_first).cpu().numpy()
-        embedding_second = G.mapping.embed(label_second).cpu().numpy()
-        interpolated_embedding = interp1d([0,2], np.vstack([embedding_first, embedding_second]), axis=0)
-        m_embed = torch.from_numpy(np.expand_dims(interpolated_embedding(1), axis=0)).to(device)
-        G.mapping = EmbeddingMappingNetwork(G.mapping)
-        E_G = EmbeddingGenerator(G)
 
     for tfr_idx in range(n_tfrecords):
         seeds = range((tfr_idx * n_tiles) + seed, (tfr_idx * n_tiles) + n_tiles + seed)
@@ -128,10 +134,6 @@ def generate_images(
             image = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
 
             # Resize/crop image.
-            gan_um = 400
-            gan_px = 512
-            target_um = 302
-            target_px = 299
             resize_factor = target_um / gan_um
             crop_width = int(resize_factor * gan_px)
             left = gan_px/2 - crop_width/2

@@ -1,20 +1,15 @@
 """Embedding GAN functions."""
 
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
+import dnnlib
+import legacy
 import numpy as np
-import pandas as pd
-import tensorflow as tf
 import torch
-from tqdm import tqdm
+from scipy.interpolate import interp1d
 from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
-from .. import dnnlib, legacy, utils
-from .interpolator import Interpolator
-
-if TYPE_CHECKING:
-    import slideflow as sf
-    import tensorflow as tf
+from .. import dnnlib, legacy
 
 
 def load_embedding_gan(
@@ -36,6 +31,10 @@ def get_class_embeddings(
     end: int,
     device: Optional[torch.device] = None
 ):
+    if start >= G.c_dim:
+        raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
+    if end >= G.c_dim:
+        raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
     label_first = torch.zeros([1, G.c_dim], device=device)
     label_first[:, start] = 1
     label_second = torch.zeros([1, G.c_dim], device=device)
@@ -76,94 +75,39 @@ def load_gan_and_embeddings(
     return E_G, embed0, embed1
 
 
-def seed_search(
-    seeds: List[int],
-    embed0: torch.tensor,
-    embed1: torch.tensor,
+def class_interpolate(
     E_G: torch.nn.Module,
-    classifier_features: Union["tf.keras.models.Model", torch.nn.Module],
+    z: torch.tensor,
+    embed0: Union[np.ndarray, torch.tensor],
+    embed1: Union[np.ndarray, torch.tensor],
     device: torch.device,
-    batch_size: int = 32,
-    normalizer: Optional["sf.norm.StainNormalizer"] = None,
-    verbose: bool = True,
-    **gan_kwargs
+    steps: int = 100,
+    **gan_kwargs: Any
 ):
+    if not isinstance(embed0, np.ndarray):
+        embed0 = embed0.cpu().numpy()
+        embed1 = embed1.cpu().numpy()
+    interpolated_embedding = interp1d([0, steps-1], np.vstack([embed0, embed1]), axis=0)
 
-    predictions = {0: [], 1: []}
-    features = {0: [], 1: []}
-    swap_labels = []
-    img_seeds = []
+    # Generate interpolated images.
+    for interp_idx in range(steps):
+        embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
+        img = E_G(z, embed, **gan_kwargs)
+        img = (img + 1) * (255/2)
+        img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
+        yield img
 
-    # --- GAN-Classifier pipeline ---------------------------------------------
-    def gan_generator(embedding):
-        def generator():
-            for seed_batch in utils.batch(seeds, batch_size):
-                z = torch.stack([utils.noise_tensor(s, z_dim=E_G.z_dim)[0] for s in seed_batch]).to(device)
-                img_batch = E_G(z, embedding.expand(z.shape[0], -1), **gan_kwargs)
-                yield utils.process_gan_batch(img_batch)
-        return generator
 
-    # --- Input data stream ---------------------------------------------------
-    gan_embed0_dts = utils.build_gan_dataset(gan_generator(embed0), 299, normalizer=normalizer)
-    gan_embed1_dts = utils.build_gan_dataset(gan_generator(embed1), 299, normalizer=normalizer)
-
-    # Calculate classifier features for GAN images created from seeds.
-    # Calculation happens in batches to improve computational efficiency.
-    # noise + embedding -> GAN -> Classifier -> Predictions, Features
-    pb = tqdm(total=len(seeds), leave=False)
-    for (seed_batch, embed0_batch, embed1_batch) in zip(utils.batch(seeds, batch_size), gan_embed0_dts, gan_embed1_dts):
-
-        features0, pred0 = classifier_features(embed0_batch)
-        features1, pred1 = classifier_features(embed1_batch)
-        pred0 = pred0[:, 0].numpy()
-        pred1 = pred1[:, 0].numpy()
-        features0 = tf.reshape(features0, (len(seed_batch), -1)).numpy().astype(np.float32)
-        features1 = tf.reshape(features1, (len(seed_batch), -1)).numpy().astype(np.float32)
-
-        # For each seed in the batch, determine if there ids "class-swapping",
-        # where the GAN class label matches the classifier prediction.
-        #
-        # This may not happen 100% percent of the time even with a perfect GAN
-        # and perfect classifier, since both classes have images that are
-        # not class-specific (such as empty background, background tissue, etc)
-        for i in range(len(seed_batch)):
-            img_seeds += [seed_batch[i]]
-            predictions[0] += [pred0[i]]
-            predictions[1] += [pred1[i]]
-            features[0] += [features0[i]]
-            features[1] += [features1[i]]
-
-            # NOTE: This logic assumes predictions are discretized at 0,
-            # which will not be true for categorical outcomes.
-            if (pred0[i] < 0) and (pred1[i] > 0):
-                # Class-swapping is observed for this seed.
-                if (pred0[i] < -0.5) and (pred1[i] > 0.5):
-                    # Strong class swapping.
-                    tail = " **"
-                    swap_labels += ['strong_swap']
-                else:
-                    # Weak class swapping.
-                    tail = " *"
-                    swap_labels += ['weak_swap']
-            elif (pred0[i] > 0) and (pred1[i] < 0):
-                # Predictions are oppositve of what is expected.
-                tail = " (!)"
-                swap_labels += ['no_swap']
-            else:
-                tail = ""
-                swap_labels += ['no_swap']
-            if verbose:
-                tqdm.write(f"Seed {seed_batch[i]:<6}: {pred0[i]:.2f}\t{pred1[i]:.2f}{tail}")
-        pb.update(len(seed_batch))
-    pb.close()
-
-    # Convert to dataframe.
-    df = pd.DataFrame({
-        'seed': pd.Series(img_seeds),
-        'pred_start': pd.Series(predictions[0]),
-        'pred_end': pd.Series(predictions[1]),
-        'features_start': pd.Series(features[0]).astype(object),
-        'features_end': pd.Series(features[1]).astype(object),
-        'class_swap': pd.Series(swap_labels),
-    })
-    return df
+def linear_interpolate(
+    G: torch.nn.Module,
+    z: torch.tensor,
+    device: torch.device,
+    steps: int = 100,
+    **gan_kwargs: Any
+):
+    for interp_idx in range(steps):
+        torch_interp = torch.tensor([[interp_idx/steps]]).to(device)
+        img = G(z, torch_interp, **gan_kwargs)
+        img = (img + 1) * (255/2)
+        img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
+        yield img
