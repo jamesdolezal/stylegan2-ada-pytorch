@@ -21,9 +21,8 @@ from scipy.interpolate import interp1d
 from tqdm import tqdm
 
 import dnnlib
+import embedding
 import legacy
-
-from . import embedding
 
 #----------------------------------------------------------------------------
 

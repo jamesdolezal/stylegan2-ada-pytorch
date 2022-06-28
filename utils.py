@@ -1,5 +1,5 @@
 from functools import partial
-from typing import TYPE_CHECKING, Callable, Iterable, Optional
+from typing import TYPE_CHECKING, Callable, Iterable, List, Optional
 
 import imageio
 import numpy as np
@@ -33,7 +33,7 @@ def masked_embedding(embedding_dims, embed_first, embed_second):
 
 
 def save_video(
-    imgs: Iterable[np.ndarray],
+    imgs: List[np.ndarray],
     path: str,
     fps: int = 30,
     codec:str = 'libx264',
@@ -56,12 +56,13 @@ def save_video(
     video_file.close()
 
 
-def save_merged(imgs: Iterable[np.ndarray], path: str, steps: Optional[int] = None):
+def save_merged(imgs: List[np.ndarray], path: str, steps: Optional[int] = None):
     if steps is None:
         steps = len(imgs)
-    out_img = Image.new('RGB', (299*steps, 299))
+    width = imgs[0].shape[1]
+    out_img = Image.new('RGB', (width*steps, width))
     x_offset = 0
     for img in imgs:
         out_img.paste(Image.fromarray(img), (x_offset, 0))
-        x_offset += 299
+        x_offset += width
     out_img.save(path)
