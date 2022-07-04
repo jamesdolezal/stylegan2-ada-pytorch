@@ -13,17 +13,16 @@ import pickle
 import random
 import time
 
-import dnnlib
-import legacy
 import numpy as np
 import PIL.Image
 import psutil
 import torch
-from metrics import metric_main
-from torch_utils import misc, training_stats
-from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
+from slideflow.io.torch import InterleaveIterator
 
-import training
+from .. import dnnlib, legacy, training
+from ..metrics import metric_main
+from ..torch_utils import misc, training_stats
+from ..torch_utils.ops import conv2d_gradfix, grid_sample_gradfix
 
 # TODO: Fix seg fault in sample image generation
 
