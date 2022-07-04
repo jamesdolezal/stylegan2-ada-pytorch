@@ -43,7 +43,7 @@ def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus        = None, # Number of GPUs: <int>, default = 1 gpu
     snap        = None, # Snapshot interval: <int>, default = 50 ticks
-    metrics     = None, # List of metric names: [], ['fid50k_full'] (default), ...
+    metrics     = 'fid50k_full', # List of metric names: [], ['fid50k_full'] (default), ...
     seed        = None, # Random seed: <int>, default = 0
 
     # Dataset.
@@ -98,8 +98,10 @@ def setup_training_loop_kwargs(
     args.image_snapshot_ticks = snap
     args.network_snapshot_ticks = snap
 
-    if metrics is None:
-        metrics = ['fid50k_full']
+    if metrics is not None and not isinstance(metrics, list):
+        metrics = [metrics]
+    elif metrics is None:
+        metrics = []
     assert isinstance(metrics, list)
     if not all(metric_main.is_valid_metric(metric) for metric in metrics):
         raise UserError('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
@@ -146,7 +148,7 @@ def setup_training_loop_kwargs(
             )
         else:
             label_kwargs = dict(
-                class_name='slideflow.io.torch.InterleaveIterator',
+                class_name='slideflow.io.torch.StyleGAN2Interleaver',
                 labels=labels,
             )
 

@@ -15,7 +15,6 @@ import uuid
 
 import numpy as np
 import torch
-from slideflow.io.torch import InterleaveIterator
 from tqdm import tqdm
 
 from .. import dnnlib
@@ -188,9 +187,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     if 'slideflow' in opts.dataset_kwargs.class_name:
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
         num_workers = 1
-        opt_kw = {k:v for k,v in opts.dataset_kwargs.items() if k not in ('resolution','xflip')}
-        #TODO: Need to add labels
-        dataset = dnnlib.util.construct_class_by_name(**opt_kw, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
+        dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
     else:
         num_workers = 3
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
