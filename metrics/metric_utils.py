@@ -13,10 +13,12 @@ import pickle
 import time
 import uuid
 
-import dnnlib
 import numpy as np
 import torch
+from slideflow.io.torch import InterleaveIterator
 from tqdm import tqdm
+
+from .. import dnnlib
 
 #----------------------------------------------------------------------------
 

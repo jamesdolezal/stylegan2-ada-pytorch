@@ -6,18 +6,16 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+import json
 import os
 import time
-import json
-import torch
-import dnnlib
 
-from . import metric_utils
-from . import frechet_inception_distance
-from . import kernel_inception_distance
-from . import precision_recall
-from . import perceptual_path_length
-from . import inception_score
+import torch
+
+from .. import dnnlib
+from . import (frechet_inception_distance, inception_score,
+               kernel_inception_distance, metric_utils, perceptual_path_length,
+               precision_recall)
 
 #----------------------------------------------------------------------------
 

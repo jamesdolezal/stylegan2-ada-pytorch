@@ -16,13 +16,13 @@ import re
 import tempfile
 
 import click
+import slideflow as sf
 import torch
 
-import dnnlib
-import slideflow as sf
-from metrics import metric_main
-from torch_utils import custom_ops, training_stats
-from training import training_loop
+from . import dnnlib, training
+from .metrics import metric_main
+from .torch_utils import custom_ops, training_stats
+from .training import augment, loss, training_loop
 
 #----------------------------------------------------------------------------
 
@@ -133,7 +133,10 @@ def setup_training_loop_kwargs(
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
         outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
-        labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        if args.slideflow_kwargs[outcome_key] is not None:
+            labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        else:
+            labels = None
 
         if 'loc_labels' in args.slideflow_kwargs:
             label_kwargs = dict(
@@ -553,14 +556,26 @@ def main(ctx, outdir, dry_run, **config_kwargs):
       lsundog256     LSUN Dog trained at 256x256 resolution.
       <PATH or URL>  Custom network pickle.
     """
-    torch.multiprocessing.set_start_method('spawn')
+    train(ctx=ctx, outdir=outdir, dry_run=dry_run, **config_kwargs)
+
+
+def train(outdir, dry_run, ctx=None, **config_kwargs):
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError as e:
+        sf.log.debug(
+        f"Encountered runtime error attempting to set start method: {e}"
+    )
     dnnlib.util.Logger(should_flush=True)
 
     # Setup training options.
     try:
         run_desc, args = setup_training_loop_kwargs(**config_kwargs)
     except UserError as err:
-        ctx.fail(err)
+        if ctx is not None:
+            ctx.fail(err)
+        else:
+            raise err
 
     # Pick output directory.
     prev_run_dirs = []
@@ -621,6 +636,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
             subprocess_fn(rank=0, args=args, temp_dir=temp_dir)
         else:
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(args, temp_dir), nprocs=args.num_gpus)
+
 
 #----------------------------------------------------------------------------
 

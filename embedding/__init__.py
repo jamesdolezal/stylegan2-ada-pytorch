@@ -2,20 +2,18 @@
 
 from typing import Any, Optional, Tuple, Union
 
-import dnnlib
-import legacy
 import numpy as np
 import torch
 from scipy.interpolate import interp1d
-from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 from .. import dnnlib, legacy
+from ..training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
 
 
 def load_embedding_gan(
     gan_pkl: str,
     device: Optional[torch.device] = None
-) -> torch.nn.Module:
+) -> Tuple[torch.nn.Module, torch.nn.Module]:
     print('Loading networks from "%s"...' % gan_pkl)
     with dnnlib.util.open_url(gan_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema']

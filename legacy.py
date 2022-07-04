@@ -6,14 +6,16 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import click
+import copy
 import pickle
 import re
-import copy
+
+import click
 import numpy as np
 import torch
-import dnnlib
-from torch_utils import misc
+
+from . import dnnlib
+from .torch_utils import misc
 
 #----------------------------------------------------------------------------
 

@@ -8,20 +8,17 @@
 
 """Calculate quality metrics for previous training run or pretrained network pickle."""
 
-import os
-import click
-import json
-import tempfile
 import copy
-import torch
-import dnnlib
+import json
+import os
+import tempfile
 
-import legacy
-from metrics import metric_main
-from metrics import metric_utils
-from torch_utils import training_stats
-from torch_utils import custom_ops
-from torch_utils import misc
+import click
+import torch
+
+from . import dnnlib, legacy, training
+from .metrics import metric_main, metric_utils
+from .torch_utils import custom_ops, misc, training_stats
 
 #----------------------------------------------------------------------------
 
