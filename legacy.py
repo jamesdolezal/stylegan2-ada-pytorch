@@ -9,12 +9,13 @@
 import copy
 import pickle
 import re
+import sys
 
 import click
 import numpy as np
 import torch
 
-from . import dnnlib
+from . import dnnlib, torch_utils
 from .torch_utils import misc
 
 #----------------------------------------------------------------------------
@@ -68,8 +69,15 @@ class _TFNetworkStub(dnnlib.EasyDict):
 
 class _LegacyUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
+        from . import dnnlib, torch_utils
+        from .dnnlib import util
+        sys.modules['torch_utils'] = torch_utils
+        sys.modules['dnnlib'] = dnnlib
+        sys.modules['dnnlib.util'] = dnnlib.util
+
         if module == 'dnnlib.tflib.network' and name == 'Network':
             return _TFNetworkStub
+
         return super().find_class(module, name)
 
 #----------------------------------------------------------------------------
