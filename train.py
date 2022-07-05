@@ -9,21 +9,20 @@
 """Train a GAN using the techniques described in the paper
 "Training Generative Adversarial Networks with Limited Data"."""
 
-import os
-import click
-import re
-import json
-import tempfile
-import torch
-import dnnlib
 import copy
+import json
+import os
+import re
+import tempfile
 
-from training import training_loop
-from metrics import metric_main
-from torch_utils import training_stats
-from torch_utils import custom_ops
-
+import click
 import slideflow as sf
+import torch
+
+from . import dnnlib, training
+from .metrics import metric_main
+from .torch_utils import custom_ops, training_stats
+from .training import augment, loss, training_loop
 
 #----------------------------------------------------------------------------
 
@@ -44,7 +43,7 @@ def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus        = None, # Number of GPUs: <int>, default = 1 gpu
     snap        = None, # Snapshot interval: <int>, default = 50 ticks
-    metrics     = None, # List of metric names: [], ['fid50k_full'] (default), ...
+    metrics     = 'fid50k_full', # List of metric names: [], ['fid50k_full'] (default), ...
     seed        = None, # Random seed: <int>, default = 0
 
     # Dataset.
@@ -99,8 +98,10 @@ def setup_training_loop_kwargs(
     args.image_snapshot_ticks = snap
     args.network_snapshot_ticks = snap
 
-    if metrics is None:
-        metrics = ['fid50k_full']
+    if metrics is not None and not isinstance(metrics, list):
+        metrics = [metrics]
+    elif metrics is None:
+        metrics = []
     assert isinstance(metrics, list)
     if not all(metric_main.is_valid_metric(metric) for metric in metrics):
         raise UserError('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
@@ -133,16 +134,26 @@ def setup_training_loop_kwargs(
         if args.slideflow_kwargs.model_type == 'linear':
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
-        if 'outcomes' in args.slideflow_kwargs:
-            labels, _ = dataset.labels(args.slideflow_kwargs['outcomes'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+        outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
+        if args.slideflow_kwargs[outcome_key] is not None:
+            labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
         else:
-            # Here for compatibility with old projects,
-            # which used "outcome_label_headers" instead of "outcomes"
-            labels, _ = dataset.labels(args.slideflow_kwargs['outcome_label_headers'], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
-        args.training_set_kwargs = dnnlib.EasyDict(class_name='slideflow.io.torch.InterleaveIterator',
-                                                   tfrecords=dataset.tfrecords(),
+            labels = None
+
+        if 'loc_labels' in args.slideflow_kwargs:
+            label_kwargs = dict(
+                class_name='slideflow.io.torch.LocLabelInterleaver',
+                loc_labels=args.slideflow_kwargs['loc_labels'],
+                labels=None,
+            )
+        else:
+            label_kwargs = dict(
+                class_name='slideflow.io.torch.StyleGAN2Interleaver',
+                labels=labels,
+            )
+
+        args.training_set_kwargs = dnnlib.EasyDict(tfrecords=dataset.tfrecords(),
                                                    img_size=args.slideflow_kwargs['tile_px'],
-                                                   labels=labels,
                                                    use_labels=cond,
                                                    chunk_size=4,
                                                    augment='xyr',
@@ -150,7 +161,9 @@ def setup_training_loop_kwargs(
                                                    num_tiles=dataset.num_tiles,
                                                    prob_weights=dataset.prob_weights,
                                                    model_type=args.slideflow_kwargs['model_type'],
-                                                   onehot=True)
+                                                   onehot=True,
+                                                   **label_kwargs)
+
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
         if slideflow is not None:
@@ -545,14 +558,26 @@ def main(ctx, outdir, dry_run, **config_kwargs):
       lsundog256     LSUN Dog trained at 256x256 resolution.
       <PATH or URL>  Custom network pickle.
     """
-    torch.multiprocessing.set_start_method('spawn')
+    train(ctx=ctx, outdir=outdir, dry_run=dry_run, **config_kwargs)
+
+
+def train(outdir, dry_run, ctx=None, **config_kwargs):
+    try:
+        torch.multiprocessing.set_start_method('spawn')
+    except RuntimeError as e:
+        sf.log.debug(
+        f"Encountered runtime error attempting to set start method: {e}"
+    )
     dnnlib.util.Logger(should_flush=True)
 
     # Setup training options.
     try:
         run_desc, args = setup_training_loop_kwargs(**config_kwargs)
     except UserError as err:
-        ctx.fail(err)
+        if ctx is not None:
+            ctx.fail(err)
+        else:
+            raise err
 
     # Pick output directory.
     prev_run_dirs = []
@@ -613,6 +638,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
             subprocess_fn(rank=0, args=args, temp_dir=temp_dir)
         else:
             torch.multiprocessing.spawn(fn=subprocess_fn, args=(args, temp_dir), nprocs=args.num_gpus)
+
 
 #----------------------------------------------------------------------------
 

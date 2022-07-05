@@ -6,13 +6,15 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import os
-import numpy as np
-import zipfile
-import PIL.Image
 import json
+import os
+import zipfile
+
+import numpy as np
+import PIL.Image
 import torch
-import dnnlib
+
+from .. import dnnlib
 
 try:
     import pyspng

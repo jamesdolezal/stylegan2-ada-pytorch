@@ -10,28 +10,29 @@
 
 import ctypes
 import fnmatch
+import glob
+import hashlib
+import html
 import importlib
 import inspect
-import numpy as np
-import os
-import shutil
-import sys
-import types
 import io
+import os
 import pickle
 import re
-import requests
-import html
-import hashlib
-import glob
+import shutil
+import sys
 import tempfile
+import types
 import urllib
 import urllib.request
 import uuid
-
 from distutils.util import strtobool
 from typing import Any, List, Tuple, Union
 
+import numpy as np
+import requests
+
+from .. import training
 
 # Util classes
 # ------------------------------------------------------------------------------------------
@@ -234,10 +235,13 @@ def get_module_from_obj_name(obj_name: str) -> Tuple[types.ModuleType, str]:
     # try each alternative in turn
     for module_name, local_obj_name in name_pairs:
         try:
-            module = importlib.import_module(module_name) # may raise ImportError
+            if module_name == 'training':
+                from .. import training as module
+            else:
+                module = importlib.import_module(module_name) # may raise ImportError
             get_obj_from_module(module, local_obj_name) # may raise AttributeError
             return module, local_obj_name
-        except:
+        except Exception as e:
             pass
 
     # maybe some of the modules themselves contain errors?

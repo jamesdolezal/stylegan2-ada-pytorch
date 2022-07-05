@@ -6,12 +6,14 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import re
 import contextlib
+import re
+import warnings
+
 import numpy as np
 import torch
-import warnings
-import dnnlib
+
+from .. import dnnlib
 
 #----------------------------------------------------------------------------
 # Cached construction of constant tensors. Avoids CPU=>GPU copy when the

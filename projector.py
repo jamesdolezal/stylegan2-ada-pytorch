@@ -19,8 +19,8 @@ import PIL.Image
 import torch
 import torch.nn.functional as F
 
-import dnnlib
-import legacy
+from . import dnnlib, legacy
+
 
 def project(
     G,

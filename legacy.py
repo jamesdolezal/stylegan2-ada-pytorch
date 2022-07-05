@@ -6,14 +6,17 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import click
+import copy
 import pickle
 import re
-import copy
+import sys
+
+import click
 import numpy as np
 import torch
-import dnnlib
-from torch_utils import misc
+
+from . import dnnlib, torch_utils
+from .torch_utils import misc
 
 #----------------------------------------------------------------------------
 
@@ -66,8 +69,15 @@ class _TFNetworkStub(dnnlib.EasyDict):
 
 class _LegacyUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
+        from . import dnnlib, torch_utils
+        from .dnnlib import util
+        sys.modules['torch_utils'] = torch_utils
+        sys.modules['dnnlib'] = dnnlib
+        sys.modules['dnnlib.util'] = dnnlib.util
+
         if module == 'dnnlib.tflib.network' and name == 'Network':
             return _TFNetworkStub
+
         return super().find_class(module, name)
 
 #----------------------------------------------------------------------------

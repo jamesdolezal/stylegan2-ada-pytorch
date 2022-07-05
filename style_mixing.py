@@ -13,12 +13,13 @@ import re
 from typing import List
 
 import click
-import dnnlib
 import numpy as np
 import PIL.Image
 import torch
 
-import legacy
+import dnnlib
+
+from . import legacy
 
 #----------------------------------------------------------------------------
 

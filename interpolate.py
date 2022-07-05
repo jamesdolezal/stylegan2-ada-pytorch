@@ -10,18 +10,14 @@
 
 import os
 import re
+from os.path import join
 from typing import List, Optional
 
 import click
-import imageio
-import numpy as np
 import torch
 from PIL import Image
-from scipy.interpolate import interp1d
 
-import dnnlib
-import legacy
-from training.networks import EmbeddingGenerator, EmbeddingMappingNetwork
+from . import embedding, utils
 
 #----------------------------------------------------------------------------
 
@@ -53,7 +49,8 @@ def num_range(s: str) -> List[int]:
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
 @click.option('--video', help='Save in video (MP4) format. If false, will save side-by-side images.', default=True, show_default=True, type=bool, metavar='BOOL')
 @click.option('--steps', help='Number of interpolation steps.', type=int, default=100, show_default=True)
-def interpolate(
+@click.option('--merge', help='Merge images side-by-side.', type=bool, default=False, show_default=True)
+def save_interpolation(
     ctx: click.Context,
     network_pkl: str,
     seeds: Optional[List[int]],
@@ -64,7 +61,8 @@ def interpolate(
     outdir: str,
     linear: bool,
     video: bool,
-    steps: int
+    steps: int,
+    merge: bool,
 ):
     """Generate images using pretrained network pickle.
 
@@ -94,61 +92,40 @@ def interpolate(
     if steps < 2:
         ctx.fail("Steps must be greater than 1.")
 
-    print('Loading networks from "%s"...' % network_pkl)
-    device = torch.device('cuda')
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
-
     os.makedirs(outdir, exist_ok=True)
 
-    if not linear:
-        if start >= G.c_dim:
-            raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
-        if end >= G.c_dim:
-            raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
-        label_first = torch.zeros([1, G.c_dim], device=device)
-        label_first[:, start] = 1
-        label_second = torch.zeros([1, G.c_dim], device=device)
-        label_second[:, end] = 1
-        embedding_first = G.mapping.embed(label_first).cpu().numpy()
-        embedding_second = G.mapping.embed(label_second).cpu().numpy()
-        interpolated_embedding = interp1d([0, steps-1], np.vstack([embedding_first, embedding_second]), axis=0)
-        G.mapping = EmbeddingMappingNetwork(G.mapping)
-        E_G = EmbeddingGenerator(G)
+    device = torch.device('cuda')
+    gan_kw = dict(truncation_psi=truncation_psi, noise_mode=noise_mode)
+    E_G, G = embedding.load_embedding_gan(network_pkl, device=device)
+    embed0, embed1 = embedding.get_class_embeddings(G, start, end, device=device)
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        if video:
-            video_file = imageio.get_writer(f'{outdir}/seed{seed:04d}.mp4', mode='I', fps=30, codec='libx264', bitrate='16M')
-            print (f'Saving optimization progress video "{outdir}/seed{seed:04d}.mp4"')
-        else:
-            out_img = Image.new('RGB', (299*steps, 299))
-            x_offset = 0
+        z = utils.noise_tensor(seed, G.z_dim).to(device)
 
-        for interp_idx in range(steps):
-            if linear:
-                torch_interp = torch.tensor([[interp_idx/steps]]).to(device)
-                img = G(z, torch_interp, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            else:
-                embed = torch.from_numpy(np.expand_dims(interpolated_embedding(interp_idx), axis=0)).to(device)
-                img = E_G(z, embed, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            img = (img + 1) * (255/2)
-            img = img.permute(0, 2, 3, 1).clamp(0, 255).to(torch.uint8)[0].cpu().numpy()
-            if video:
-                video_file.append_data(img)
-            else:
-                out_img.paste(Image.fromarray(img), (x_offset, 0))
-                x_offset += 299
-
-        if video:
-            video_file.close()
+        # Set up interpolation generator
+        if linear:
+            generator = embedding.linear_interpolate(G, z, device, steps=steps, **gan_kw)
         else:
-            out_img.save(f'{outdir}/seed{seed}.png')
+            generator = embedding.class_interpolate(E_G, z, embed0, embed1, device=device, steps=steps, **gan_kw)
+
+        # Process interpolated images
+        if video:
+            video_path = join(outdir, f'seed{seed:04d}.mp4')
+            print(f'Saving optimization progress video "{video_path}"')
+            utils.save_video(generator, path=video_path)
+        elif merge:
+            out_path = join(outdir, f'seed{seed:04d}.png')
+            print(f'Saving merged picture "{video_path}"')
+            utils.save_merged(generator, path=out_path, steps=steps)
+        else:
+            for interp_idx, img in enumerate(generator):
+                Image.fromarray(img).save(join(outdir, f'seed{seed:04d}-{interp_idx:03d}.png'))
+
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    interpolate() # pylint: disable=no-value-for-parameter
+    save_interpolation() # pylint: disable=no-value-for-parameter
 
 #----------------------------------------------------------------------------
