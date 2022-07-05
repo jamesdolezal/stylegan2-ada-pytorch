@@ -123,7 +123,7 @@ def generate_images(
     label = torch.zeros([1, G.c_dim], device=device)
     if G.c_dim != 0:
         if class_idx is None:
-            raise InvalidArgumentError('Must specify class label with --class when using a conditional network')
+            raise InvalidArgumentError('Must specify class label when using a conditional network')
         label[:, class_idx] = 1
     else:
         if class_idx is not None:
