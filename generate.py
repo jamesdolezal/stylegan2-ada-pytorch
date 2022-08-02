@@ -12,6 +12,7 @@ import os
 import re
 from io import BytesIO
 from typing import List, Optional
+from tqdm import tqdm
 
 import click
 import numpy as np
@@ -55,6 +56,7 @@ def generate_images(
     gan_px: Optional[int] = None,
     target_um: Optional[int] = None,
     target_px: Optional[int] = None,
+    slide_name: str = 'gan',
 ):
     """Generate images using pretrained network pickle.
 
@@ -83,7 +85,14 @@ def generate_images(
 
     if format not in ('png', 'jpg'):
         raise InvalidArgumentError('--format must be either "jpg" or "png".')
-    if resize and None in (gan_um, gan_px, target_um, target_px):
+    if resize:
+        print("The `resize` argument is deprecated. To resize images, "
+              "use the arguments `target_px` and `target_um`.")
+    if target_px is not None and target_um is None:
+        target_um = gan_um
+    if target_px is not None:
+        print(f"Resizing GAN images to target {target_px} px, {target_um} um")
+    if target_px and None in (gan_um, gan_px, target_um, target_px):
         raise InvalidArgumentError('If resizing, must supply gan-um, gan-px, target-um, and target-px')
 
     print('Loading networks from "%s"...' % network_pkl)
@@ -130,15 +139,14 @@ def generate_images(
             sf.log.warning('--class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    for seed_idx, seed in enumerate(seeds):
-        print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
+    for seed_idx, seed in enumerate(tqdm(seeds)):
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
         img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
         img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         image = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
 
         # Resize/crop image.
-        if resize:
+        if target_px:
             resize_factor = target_um / gan_um
             crop_width = int(resize_factor * gan_px)
             left = gan_px/2 - crop_width/2
@@ -148,7 +156,7 @@ def generate_images(
             image = image.crop((left, upper, right, lower)).resize((target_px, target_px))
 
         if tfr_path:
-            slidename_bytes = bytes(f'gan', 'utf-8')
+            slidename_bytes = bytes(slide_name, 'utf-8')
             with BytesIO() as output:
                 image.save(output, format=format)
                 record = sf.io.serialized_record(slidename_bytes, output.getvalue(), seed, 0)
