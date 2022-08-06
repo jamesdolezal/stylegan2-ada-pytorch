@@ -97,7 +97,7 @@ def save_interpolation(
     device = torch.device('cuda')
     gan_kw = dict(truncation_psi=truncation_psi, noise_mode=noise_mode)
     E_G, G = embedding.load_embedding_gan(network_pkl, device=device)
-    embed0, embed1 = embedding.get_class_embeddings(G, start, end, device=device)
+    embeddings = embedding.get_embeddings(G, device=device)
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
@@ -108,7 +108,7 @@ def save_interpolation(
         if linear:
             generator = embedding.linear_interpolate(G, z, device, steps=steps, **gan_kw)
         else:
-            generator = embedding.class_interpolate(E_G, z, embed0, embed1, device=device, steps=steps, **gan_kw)
+            generator = embedding.class_interpolate(E_G, z, embeddings[start], embeddings[end], device=device, steps=steps, **gan_kw)
 
         # Process interpolated images
         if video:

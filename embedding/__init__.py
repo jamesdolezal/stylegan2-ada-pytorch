@@ -23,28 +23,20 @@ def load_embedding_gan(
     return EmbeddingGenerator(G), G
 
 
-def get_class_embeddings(
+def get_embeddings(
     G: torch.nn.Module,
-    start: int,
-    end: int,
     device: Optional[torch.device] = None
 ):
-    if start >= G.c_dim:
-        raise ValueError(f"Starting index {start} too large, must be < {G.c_dim}")
-    if end >= G.c_dim:
-        raise ValueError(f"Ending index {end} too large, must be < {G.c_dim}")
-    label_first = torch.zeros([1, G.c_dim], device=device)
-    label_first[:, start] = 1
-    label_second = torch.zeros([1, G.c_dim], device=device)
-    label_second[:, end] = 1
-    embedding_first = G.mapping.embed(label_first).cpu().numpy()
-    embedding_second = G.mapping.embed(label_second).cpu().numpy()
-    embed0 = torch.from_numpy(embedding_first)
-    embed1 = torch.from_numpy(embedding_second)
-    if device is not None:
-        embed0 = embed0.to(device)
-        embed1 = embed1.to(device)
-    return embed0, embed1
+    embeddings = {}
+    for e in range(G.c_dim):
+        label = torch.zeros([1, G.c_dim], device=device)
+        label[:, e] = 1
+        embedding = G.mapping.embed(label).cpu().numpy()
+        torch_embedding = torch.from_numpy(embedding)
+        if device is not None:
+            torch_embedding = torch_embedding.to(device)
+        embeddings[e] = torch_embedding
+    return embeddings
 
 
 def load_gan_and_embeddings(
@@ -69,8 +61,8 @@ def load_gan_and_embeddings(
         torch.Tensor: Second class embedding.
     """
     E_G, G = load_embedding_gan(gan_pkl, device=device)
-    embed0, embed1 = get_class_embeddings(G, start, end, device=device)
-    return E_G, embed0, embed1
+    embeddings = get_embeddings(G, device=device)
+    return E_G, embeddings[start], embeddings[end]
 
 
 def class_interpolate(

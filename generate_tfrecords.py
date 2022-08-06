@@ -92,9 +92,9 @@ def generate_images(
     if embed:
         print("Generating images using middle embedding...")
         G, E_G = embedding.load_embedding_gan(network_pkl, device=device)
-        embed0, embed1 = embedding.get_class_embeddings(G, start=0, end=1, device=device)
-        embedding_first = embed0.cpu().numpy()
-        embedding_second = embed1.cpu().numpy()
+        embeddings = embedding.get_embeddings(G, device=device)
+        embedding_first = embeddings[0].cpu().numpy()
+        embedding_second = embeddings[1].cpu().numpy()
         interpolated_embedding = interp1d([0,2], np.vstack([embedding_first, embedding_second]), axis=0)
         m_embed = torch.from_numpy(np.expand_dims(interpolated_embedding(1), axis=0)).to(device)
     else:
