@@ -17,9 +17,7 @@ import numpy as np
 import PIL.Image
 import torch
 
-import dnnlib
-
-from . import legacy
+from stylegan2 import legacy, dnnlib
 
 #----------------------------------------------------------------------------
 

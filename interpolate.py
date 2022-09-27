@@ -17,7 +17,7 @@ import click
 import torch
 from PIL import Image
 
-from . import embedding, utils
+from stylegan2 import embedding, utils
 
 #----------------------------------------------------------------------------
 

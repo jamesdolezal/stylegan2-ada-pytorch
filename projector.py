@@ -19,7 +19,7 @@ import PIL.Image
 import torch
 import torch.nn.functional as F
 
-from . import dnnlib, legacy
+from stylegan2 import dnnlib, legacy
 
 
 def project(
