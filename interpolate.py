@@ -114,11 +114,11 @@ def save_interpolation(
         if video:
             video_path = join(outdir, f'seed{seed:04d}.mp4')
             print(f'Saving optimization progress video "{video_path}"')
-            utils.save_video(generator, path=video_path)
+            utils.save_video(list(generator), path=video_path)
         elif merge:
             out_path = join(outdir, f'seed{seed:04d}.png')
-            print(f'Saving merged picture "{video_path}"')
-            utils.save_merged(generator, path=out_path, steps=steps)
+            print(f'Saving merged picture "{out_path}"')
+            utils.save_merged(list(generator), path=out_path, steps=steps)
         else:
             for interp_idx, img in enumerate(generator):
                 Image.fromarray(img).save(join(outdir, f'seed{seed:04d}-{interp_idx:03d}.png'))
