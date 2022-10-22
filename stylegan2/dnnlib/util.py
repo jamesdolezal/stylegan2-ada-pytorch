@@ -33,6 +33,9 @@ import numpy as np
 import requests
 
 from .. import training
+from ..training import augment, loss, networks, dataset
+
+import_debug = False  # Prints log messages to debug import errors
 
 # Util classes
 # ------------------------------------------------------------------------------------------
@@ -235,10 +238,16 @@ def get_module_from_obj_name(obj_name: str) -> Tuple[types.ModuleType, str]:
     # try each alternative in turn
     for module_name, local_obj_name in name_pairs:
         try:
+            if import_debug:
+                print("Attempting to load module", module_name)
             if module_name == 'training':
                 from .. import training as module
+                if import_debug:
+                    print("Using pre-loaded module 'training'")
             else:
                 module = importlib.import_module(module_name) # may raise ImportError
+            if import_debug:
+                print(f"\tRequesting object '{local_obj_name}' from module")
             get_obj_from_module(module, local_obj_name) # may raise AttributeError
             return module, local_obj_name
         except Exception as e:
@@ -250,6 +259,8 @@ def get_module_from_obj_name(obj_name: str) -> Tuple[types.ModuleType, str]:
             importlib.import_module(module_name) # may raise ImportError
         except ImportError:
             if not str(sys.exc_info()[1]).startswith("No module named '" + module_name + "'"):
+                if import_debug:
+                    print(f"No module named '{module_name}' (attempted to load '{_local_obj_name}')")
                 raise
 
     # maybe the requested attribute is missing?

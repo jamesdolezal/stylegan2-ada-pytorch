@@ -10,8 +10,12 @@ import numpy as np
 import scipy.signal
 import torch
 
-from ..torch_utils import misc, persistence
-from ..torch_utils.ops import conv2d_gradfix, grid_sample_gradfix, upfirdn2d
+try:
+    from ..torch_utils import misc, persistence
+    from ..torch_utils.ops import conv2d_gradfix, grid_sample_gradfix, upfirdn2d
+except ImportError:
+    from torch_utils import misc, persistence
+    from torch_utils.ops import conv2d_gradfix, grid_sample_gradfix, upfirdn2d
 
 #----------------------------------------------------------------------------
 # Coefficients of various wavelet decomposition low-pass filters.

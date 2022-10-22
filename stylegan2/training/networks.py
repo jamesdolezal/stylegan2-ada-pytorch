@@ -9,8 +9,12 @@
 import numpy as np
 import torch
 
-from ..torch_utils import misc, persistence
-from ..torch_utils.ops import bias_act, conv2d_resample, fma, upfirdn2d
+try:
+    from ..torch_utils import misc, persistence
+    from ..torch_utils.ops import bias_act, conv2d_resample, fma, upfirdn2d
+except ImportError:
+    from torch_utils import misc, persistence
+    from torch_utils.ops import bias_act, conv2d_resample, fma, upfirdn2d
 
 #TODO: implement support for missing class labels
 

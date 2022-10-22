@@ -77,6 +77,8 @@ class _LegacyUnpickler(pickle.Unpickler):
 
         if module == 'dnnlib.tflib.network' and name == 'Network':
             return _TFNetworkStub
+        if module.startswith('stylegan'):
+            module = module[10:]
 
         return super().find_class(module, name)
 

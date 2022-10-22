@@ -238,7 +238,11 @@ def _src_to_module(src):
         sys.modules[module_name] = module
         _module_to_src_dict[module] = src
         _src_to_module_dict[src] = module
-        exec(src, module.__dict__) # pylint: disable=exec-used
+        try:
+            exec(src, module.__dict__) # pylint: disable=exec-used
+        except Exception:
+            print(src)
+            raise
     return module
 
 #----------------------------------------------------------------------------
