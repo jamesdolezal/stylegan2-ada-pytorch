@@ -72,8 +72,14 @@ class _LegacyUnpickler(pickle.Unpickler):
         from . import dnnlib, torch_utils
         from .dnnlib import util
         sys.modules['torch_utils'] = torch_utils
+        sys.modules['slideflow.gan.stylegan2.torch_utils'] = torch_utils
+        sys.modules['slideflow.gan.stylegan3.torch_utils'] = torch_utils
         sys.modules['dnnlib'] = dnnlib
+        sys.modules['slideflow.gan.stylegan2.dnnlib'] = dnnlib
+        sys.modules['slideflow.gan.stylegan3.dnnlib'] = dnnlib
         sys.modules['dnnlib.util'] = dnnlib.util
+        sys.modules['slideflow.gan.stylegan2.dnnlib.util'] = dnnlib.util
+        sys.modules['slideflow.gan.stylegan3.dnnlib.util'] = dnnlib.util
 
         if module == 'dnnlib.tflib.network' and name == 'Network':
             return _TFNetworkStub
