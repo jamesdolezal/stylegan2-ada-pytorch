@@ -47,7 +47,7 @@ def num_range(s: str) -> List[int]:
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--linear', help='Interpolate a linear outcome from 0-1', type=bool, metavar='BOOL')
-@click.option('--video', help='Save in video (MP4) format. If false, will save side-by-side images.', default=True, show_default=True, type=bool, metavar='BOOL')
+@click.option('--video', help='Save in video (MP4) format.', default=False, show_default=True, type=bool, metavar='BOOL')
 @click.option('--steps', help='Number of interpolation steps.', type=int, default=100, show_default=True)
 @click.option('--merge', help='Merge images side-by-side.', type=bool, default=False, show_default=True)
 def save_interpolation(
