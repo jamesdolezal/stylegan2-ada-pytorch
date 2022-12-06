@@ -187,6 +187,8 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     if 'slideflow' in opts.dataset_kwargs.class_name:
         #TODO: Not sure if the seed needs to be re-applied here, should investigate
         num_workers = 1
+        if 'xflip' in opts.dataset_kwargs:
+            del opts.dataset_kwargs['xflip']
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs, rank=opts.rank, num_replicas=opts.num_gpus, infinite=False) # subclass of training.dataset.Dataset
     else:
         num_workers = 3
@@ -234,7 +236,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
     else:
         item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
     dataset_iter = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
-    for images, _labels in tqdm(dataset_iter, total=num_items // (batch_size * opts.num_gpus), position=opts.rank, ncols=80, ascii=False):
+    for images, _labels in dataset_iter:
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
         features = detector(images.to(opts.device), **detector_kwargs)
@@ -261,12 +263,14 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     # Setup generator and load labels.
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
     if 'slideflow' in opts.dataset_kwargs.class_name:
-        slideflow_kwargs = {k:v for k,v in opts.slideflow_kwargs.items() if k not in ('model_type',)}
+        if 'onehot' not in opts.dataset_kwargs:
+            opts.dataset_kwargs['onehot'] = True
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs,
-                                                      **slideflow_kwargs,
                                                       rank=opts.rank,
                                                       num_replicas=opts.num_gpus,
                                                       infinite=False) # subclass of training.dataset.Dataset
+        all_labels = list(dataset.labels.values())
+        n_labels = len(all_labels)
     else:
         dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
@@ -304,7 +308,10 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
         images = []
         for _i in range(batch_size // batch_gen):
             z = torch.randn([batch_gen, G.z_dim], device=opts.device)
-            c = [dataset.get_label(np.random.randint(dataset_len)) for _i in range(batch_gen)]
+            if 'slideflow' in opts.dataset_kwargs.class_name:
+                c = [all_labels[np.random.randint(n_labels)] for _i in range(batch_gen)]
+            else:
+                c = [dataset.get_label(np.random.randint(dataset_len)) for _i in range(batch_gen)]
             c = torch.from_numpy(np.stack(c)).pin_memory().to(opts.device)
             images.append(run_generator(z, c))
         images = torch.cat(images)

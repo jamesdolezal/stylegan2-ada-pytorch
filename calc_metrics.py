@@ -16,9 +16,9 @@ import tempfile
 import click
 import torch
 
-from . import dnnlib, legacy, training
-from .metrics import metric_main, metric_utils
-from .torch_utils import custom_ops, misc, training_stats
+from stylegan2 import dnnlib, legacy
+from stylegan2.metrics import metric_main, metric_utils
+from stylegan2.torch_utils import custom_ops, misc, training_stats
 
 #----------------------------------------------------------------------------
 
@@ -86,7 +86,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('network_pkl', '--network', help='Network pickle filename or URL', metavar='PATH', required=True)
 @click.option('--metrics', help='Comma-separated list or "none"', type=CommaSeparatedList(), default='fid50k_full', show_default=True)
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
-@click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
+@click.option('--mirror', help='Enable dataset x-flips and rotation  [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
 
@@ -154,20 +154,33 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
     # Finalize dataset options.
     args.dataset_kwargs.resolution = args.G.img_resolution
     args.dataset_kwargs.use_labels = (args.G.c_dim != 0)
-    if mirror is not None:
+
+    # Locate run dir.
+    args.run_dir = None
+    is_slideflow_model = False
+    if os.path.isfile(network_pkl):
+        pkl_dir = os.path.dirname(network_pkl)
+        train_opt = os.path.join(pkl_dir, 'training_options.json')
+        if os.path.isfile(train_opt):
+            args.run_dir = pkl_dir
+            with open(train_opt, 'r') as f:
+                train_opt_kw = json.load(f)
+                args.dataset_kwargs = train_opt_kw['training_set_kwargs']
+                is_slideflow_model = ('slideflow_kwargs' in train_opt_kw)
+            if is_slideflow_model:
+                args.slideflow_kwargs = train_opt_kw['slideflow_kwargs']
+                if 'resolution' in args.dataset_kwargs:
+                    del args.dataset_kwargs['resolution']
+
+    if mirror is not None and is_slideflow_model:
+        args.dataset_kwargs.augment = 'xyr'
+    elif mirror is not None:
         args.dataset_kwargs.xflip = mirror
 
     # Print dataset options.
     if args.verbose:
         print('Dataset options:')
         print(json.dumps(args.dataset_kwargs, indent=2))
-
-    # Locate run dir.
-    args.run_dir = None
-    if os.path.isfile(network_pkl):
-        pkl_dir = os.path.dirname(network_pkl)
-        if os.path.isfile(os.path.join(pkl_dir, 'training_options.json')):
-            args.run_dir = pkl_dir
 
     # Launch processes.
     if args.verbose:
