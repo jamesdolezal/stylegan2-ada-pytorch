@@ -151,6 +151,12 @@ def setup_training_loop_kwargs(
                 labels=labels,
             )
 
+        # Normalizer
+        if 'normalizer_kwargs' in args.slideflow_kwargs:
+            label_kwargs.update(args.slideflow_kwargs['normalizer_kwargs'])
+            method = args.slideflow_kwargs['normalizer_kwargs']['normalizer']
+            print(f"Using {method} normalization.")
+
         args.training_set_kwargs = dnnlib.EasyDict(tfrecords=dataset.tfrecords(),
                                                    img_size=args.slideflow_kwargs['tile_px'],
                                                    use_labels=cond,
