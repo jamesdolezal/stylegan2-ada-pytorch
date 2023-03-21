@@ -43,7 +43,7 @@ def setup_snapshot_image_grid(training_set, random_seed=0, training_set_iterator
     gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
 
     # No labels => show random subset of training samples.
-    if not hasattr(training_set, '__len__'):
+    if not hasattr(training_set, '__len__') or training_set.__class__.__name__ == 'StyleGAN2Interleaver':
         return setup_snapshot_image_grid_iterator(training_set, training_set_iterator)
     if not training_set.has_labels:
         all_indices = list(range(len(training_set)))

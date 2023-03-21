@@ -217,7 +217,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
             return FeatureStats.load(cache_file)
 
     # Initialize.
-    if hasattr(dataset, '__len__'):
+    if hasattr(dataset, '__len__') and dataset.__class__.__name__ != 'StyleGAN2Interleaver':
         num_items = len(dataset)
         if max_items is not None:
             num_items = min(num_items, max_items)
@@ -297,7 +297,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                                     verbose=progress.verbose)
 
     # Length of dataset (support for slideflow datasets)
-    if hasattr(dataset, '__len__'):
+    if hasattr(dataset, '__len__') and dataset.__class__.__name__ != 'StyleGAN2Interleaver':
         dataset_len = len(dataset)
     else:
         dataset_len = dataset.num_tiles
