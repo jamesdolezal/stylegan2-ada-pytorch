@@ -158,7 +158,9 @@ def setup_training_loop_kwargs(
             method = args.slideflow_kwargs.normalizer_kwargs['normalizer']
             print(f"Using {method} normalization.")
 
-        if args.slideflow_kwargs.crop:
+        if args.slideflow_kwargs.resize:
+            final_size = args.slideflow_kwargs.resize
+        elif args.slideflow_kwargs.crop:
             final_size = args.slideflow_kwargs.crop
         else:
             final_size = args.slideflow_kwargs.tile_px
@@ -176,6 +178,7 @@ def setup_training_loop_kwargs(
             onehot=True,
             max_size=None,
             crop=args.slideflow_kwargs.crop,
+            resize=args.slideflow_kwargs.resize,
             **label_kwargs
         )
 
