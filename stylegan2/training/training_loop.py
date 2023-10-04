@@ -152,7 +152,7 @@ def training_loop(
 
     if 'slideflow' in training_set_kwargs.class_name:
         training_set_kwargs['augment'] = 'xyr'
-        training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs)
+        training_set = dnnlib.util.construct_class_by_name(rank=rank, num_replicas=num_gpus, **training_set_kwargs)
         training_set_iterator = iter(torch.utils.data.DataLoader(training_set, batch_size=batch_size//num_gpus, **data_loader_kwargs))
     else:
         training_set = dnnlib.util.construct_class_by_name(**training_set_kwargs) # subclass of training.dataset.Dataset
