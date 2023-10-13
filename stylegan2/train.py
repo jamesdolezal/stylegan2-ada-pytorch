@@ -176,7 +176,6 @@ def setup_training_loop_kwargs(
             prob_weights=dataset.prob_weights,
             model_type=args.slideflow_kwargs.model_type,
             onehot=True,
-            max_size=None,
             crop=args.slideflow_kwargs.crop,
             resize=args.slideflow_kwargs.resize,
             **label_kwargs
