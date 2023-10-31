@@ -134,23 +134,45 @@ def setup_training_loop_kwargs(
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
         outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
+        has_tile_labels = 'tile_labels' in args.slideflow_kwargs and args.slideflow_kwargs.tile_labels is not None
         if args.slideflow_kwargs[outcome_key] is not None:
-            labels, _ = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+            labels, unique = dataset.labels(args.slideflow_kwargs[outcome_key], use_float=(args.slideflow_kwargs['model_type'] != 'categorical'))
+            if args.slideflow_kwargs.model_type == 'categorical':
+                outcome_labels = dict(zip(range(len(unique)), unique))
+            else:
+                outcome_labels = None
+        elif has_tile_labels:
+            labels = None
+            try:
+                import pandas as pd
+                _tl = pd.read_parquet(args.slideflow_kwargs.tile_labels)
+                n_out = _tl.iloc[0].label.shape[0]
+                out_range = list(map(str, range(n_out)))
+                outcome_labels = dict(zip(out_range, out_range))
+                del _tl
+            except Exception as e:
+                print(e)
+                print("WARN: Unable to interpret tile labels for JSON logging.")
+                raise
+                outcome_labels = None
         else:
             labels = None
+            outcome_labels = None
 
-        has_tile_labels = 'tile_labels' in args.slideflow_kwargs and args.slideflow_kwargs.tile_labels is not None
+        # Configure the dataset interleaver
         if has_tile_labels:
             label_kwargs = dict(
                 class_name='slideflow.io.torch.TileLabelInterleaver',
                 tile_labels=args.slideflow_kwargs.tile_labels,
                 labels=None,
             )
+            args.slideflow_kwargs.outcome_label_headers = 'tile_labels'
         else:
             label_kwargs = dict(
                 class_name='slideflow.io.torch.StyleGAN2Interleaver',
                 labels=labels,
             )
+        args.slideflow_kwargs.outcome_labels = outcome_labels
 
         # Normalizer
         if 'normalizer_kwargs' in args.slideflow_kwargs:
@@ -173,6 +195,7 @@ def setup_training_loop_kwargs(
             augment='xyr',
             standardize=False,
             num_tiles=dataset.num_tiles,
+            max_size=dataset.num_tiles,  # Required for stylegan, not used by slideflow
             prob_weights=dataset.prob_weights,
             model_type=args.slideflow_kwargs.model_type,
             onehot=True,
