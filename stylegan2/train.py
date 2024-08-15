@@ -130,7 +130,7 @@ def setup_training_loop_kwargs(
             raise UserError(f'--slideflow: {err}')
         if args.slideflow_kwargs.model_type not in ('categorical', 'linear', 'classification', 'regression'):
             raise UserError(f'Unknown slideflow model type {args.slideflow_kwargs.model_type}, must be "classification"/"categorical" or "regression"/"linear"')
-        if args.slideflow_kwargs.model_type == 'linear':
+        if args.slideflow_kwargs.model_type in ('regression', 'linear'):
             interp_embed = True
         project, dataset = load_project(args.slideflow_kwargs)
         outcome_key = 'outcomes' if 'outcomes' in args.slideflow_kwargs else 'outcome_label_headers'
